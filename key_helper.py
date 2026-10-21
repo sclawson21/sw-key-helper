@@ -1,9 +1,10 @@
 """
 SW Key Helper - two helpers for the Droid Tycoon map:
   Fishing  finds the yellow key tiles, reads them and presses them.
-  Clicker  keeps left-clicking (AFK credit farming) while Fortnite is in front.
-  Traits   keeps rerolling the trait on your first (left) droid until it gets
-           Overclocked or Chip Finder. Stand at the trait scanner first.
+  Clicker  Scrap Hit keeps left-clicking, Potion Grab presses F every 2-20 seconds
+           (only while Fortnite is in front).
+  Traits   keeps rerolling the left, right or both droids at the trait scanner
+           until they get a trait you picked. Never rolls Iconic droids.
 
 Hotkeys (work while the game is focused):
   Insert      open the mode menu / start the chosen mode / stop
@@ -12,6 +13,8 @@ Hotkeys (work while the game is focused):
               Off / Any / Rainbow-only, Insert starts rolling)
   Page Up     faster  (fishing: less delay between presses / clicker: more clicks)
   Page Down   slower
+  F9 / F10    add / remove the droid on screen (droid screen or blueprint card) in
+              your LMS Droid Tycoon inventory - press once to check, again to save
   Home        draw a custom scan area (optional - the default is automatic)
   Delete      save debug pictures (debug_raw.png, debug_detect.png, debug_letters.png)
   End         quit
@@ -65,7 +68,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -102,11 +105,19 @@ DEFAULTS = {
     "stop_if_unreadable": True,  # stop if a trait that might be wanted can't be read
     "roll_wait": 7.0,           # seconds the roll animation takes before pressing F again
     "max_rolls": 0,             # stop after this many rolls (0 = no limit)
+    "trait_droids": "left",     # which droid to reroll: "left", "right" or "both" (left first)
     "max_cost": "500T",         # stop when the next roll costs more than this ("off" = no limit)
     # --- Auto clicker ---
-    "clicker_cps": 10,          # clicks per second (Page Up/Down change it)
+    "clicker_cps": 10,          # Scrap Hit: clicks per second (Page Up/Down change it)
+    "clicker_kind": "scrap",    # "scrap" = keep left-clicking, "potion" = press F every few seconds
+    "potion_interval": 5,       # Potion Grab: seconds between F presses (2-20, Page Up/Down)
     "clicker_window": "Fortnite",  # only click while this window is in front ("" = anywhere)
     "interact_key": "f",
+    # --- Inventory (LMS Droid Tycoon website) ---
+    "inventory_player": "",     # which website player F9/F10 update (pick it in the tray menu)
+    "kyber_default": "n",       # Kyber colour for added droids: n=Not Activated, g, b, p
+    "inv_add_key": "f9",
+    "inv_remove_key": "f10",
     # --- Overlay ---
     "overlay": True,            # show the on-screen info box
     "hide_when_paused": True,   # hide the box while paused (it pops up briefly on changes)
@@ -184,12 +195,17 @@ state = {
     "message": "", "error": "", "show_until": 0.0,
     "mode": "fishing", "menu_open": False, "menu_choice": 0, "menu_time": 0.0,
     "trait": "", "rolls": 0, "status": "",
-    "menu_stage": "mode", "pick_index": 0,
+    "menu_stage": "mode", "pick_index": 0, "choice_index": 0,
+    "trait_queue": [], "trait_side": "left", "side_checked": None,
+    "inv_pending": None, "inv_busy": False,
     "clicks": 0, "spent": 0.0, "cost": "", "pending_roll": None, "roll_times": [],
 }
 MODES = ["fishing", "traits", "clicker"]
-MODE_NAMES = ["Fishing", "Traits (reroll left droid)", "Auto Clicker"]
-COST_STEPS = ["off", "1B", "10B", "100B", "1T", "10T", "100T", "500T", "1Qa", "10Qa", "100Qa"]
+MODE_NAMES = ["Fishing", "Traits (droid scanner)", "Auto Clicker"]
+DROID_CHOICES = [("left", "Left droid"), ("right", "Right droid"), ("both", "Both (left, then right)")]
+CLICKER_CHOICES = [("scrap", "Scrap Hit (keep left-clicking)"), ("potion", "Potion Grab (press F every few seconds)")]
+COST_STEPS = ["off", "1B", "10B", "100B", "1T", "10T", "50T", "100T", "500T", "600T", "700T",
+              "800T", "900T", "1Qa", "2Qa", "3Qa", "4Qa", "5Qa"]   # 5Qa is the cap
 SUFFIX = {"": 1, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12, "QA": 1e15, "QI": 1e18,
           "SX": 1e21, "SP": 1e24}
 STATS_FILE = "trait_stats.json"
@@ -234,9 +250,14 @@ def start_mode():
     state["rolls"], state["trait"], state["status"] = 0, "", ""
     state["clicks"], state["spent"], state["cost"] = 0, 0.0, ""
     state["pending_roll"], state["roll_times"] = None, []
-    state["enabled"] = True
+    state["last_cost"] = None
     if state["mode"] == "traits":
+        state["trait_queue"] = {"left": ["left"], "right": ["right"],
+                                "both": ["left", "right"]}.get(cfg["trait_droids"], ["left"])
+        state["trait_side"] = state["trait_queue"].pop(0)
+        state["side_checked"] = None
         fetch_shared()
+    state["enabled"] = True
     notify(f"{state['mode'].title()} started")
 
 
@@ -248,11 +269,25 @@ def on_key(key):
             notify(f"{state['mode'].title()} stopped")
         elif state["menu_open"] and state["menu_stage"] == "mode":
             state["mode"] = MODES[state["menu_choice"]]
-            if state["mode"] == "traits":         # traits -> show the trait picker first
-                state["menu_stage"] = "traits"
-                state["menu_time"] = time.time()
+            state["menu_time"] = time.time()
+            if state["mode"] == "traits":         # traits -> which droid(s) first
+                state["menu_stage"] = "droids"
+                state["choice_index"] = next((i for i, c in enumerate(DROID_CHOICES)
+                                              if c[0] == cfg["trait_droids"]), 0)
+            elif state["mode"] == "clicker":      # clicker -> scrap or potion
+                state["menu_stage"] = "clicker"
+                state["choice_index"] = next((i for i, c in enumerate(CLICKER_CHOICES)
+                                              if c[0] == cfg["clicker_kind"]), 0)
             else:
                 start_mode()
+        elif state["menu_open"] and state["menu_stage"] == "droids":
+            cfg["trait_droids"] = DROID_CHOICES[state["choice_index"]][0]
+            state["menu_stage"] = "traits"            # then the trait picker
+            state["menu_time"] = time.time()
+        elif state["menu_open"] and state["menu_stage"] == "clicker":
+            cfg["clicker_kind"] = CLICKER_CHOICES[state["choice_index"]][0]
+            save_config()
+            start_mode()
         elif state["menu_open"]:                  # trait picker -> start rolling
             if not any(v != "off" for v in cfg["trait_wanted"].values()):
                 notify("Turn on at least one trait first (Left/Right)")
@@ -268,6 +303,9 @@ def on_key(key):
         step = 1 if key == K.down else -1
         if state["menu_stage"] == "mode":
             state["menu_choice"] = (state["menu_choice"] + step) % len(MODES)
+        elif state["menu_stage"] in ("droids", "clicker"):
+            n = len(DROID_CHOICES if state["menu_stage"] == "droids" else CLICKER_CHOICES)
+            state["choice_index"] = (state["choice_index"] + step) % n
         else:
             state["pick_index"] = (state["pick_index"] + step) % (len(TRAIT_NAMES) + 1)
     elif key in (K.left, K.right) and state["menu_open"] and state["menu_stage"] == "traits":
@@ -275,21 +313,30 @@ def on_key(key):
         step = 1 if key == K.right else -1
         if state["pick_index"] == len(TRAIT_NAMES):          # last row: cost limit
             cur = cfg["max_cost"] if cfg["max_cost"] in COST_STEPS else "500T"
-            cfg["max_cost"] = COST_STEPS[(COST_STEPS.index(cur) + step) % len(COST_STEPS)]
+            i = min(len(COST_STEPS) - 1, max(0, COST_STEPS.index(cur) + step))   # stops at the ends
+            cfg["max_cost"] = COST_STEPS[i]
         else:
             name = TRAIT_NAMES[state["pick_index"]]
             cur = cfg["trait_wanted"].get(name, "off")
             cfg["trait_wanted"][name] = CHOICES[(CHOICES.index(cur) + step) % len(CHOICES)]
     elif key in (K.page_up, K.page_down) and state["mode"] == "clicker":
         step = 1 if key == K.page_up else -1
-        cfg["clicker_cps"] = int(min(50, max(1, cfg["clicker_cps"] + step)))
+        if cfg["clicker_kind"] == "potion":       # Page Up = faster = shorter wait
+            cfg["potion_interval"] = int(min(20, max(2, cfg["potion_interval"] - step)))
+            notify(f"Potion Grab: F every {cfg['potion_interval']} seconds")
+        else:
+            cfg["clicker_cps"] = int(min(50, max(1, cfg["clicker_cps"] + step)))
+            notify(f"Scrap Hit: {cfg['clicker_cps']} clicks per second")
         save_config()
-        notify(f"Auto clicker: {cfg['clicker_cps']} clicks per second")
     elif key in (K.page_up, K.page_down):
         step = -DELAY_STEP if key == K.page_up else DELAY_STEP
         cfg["press_delay"] = round(min(DELAY_MAX, max(DELAY_MIN, cfg["press_delay"] + step)), 3)
         save_config()
         notify(f"Delay between presses: {int(cfg['press_delay'] * 1000)} ms")
+    elif key == getattr(K, cfg["inv_add_key"], None):
+        inventory_hotkey("add")
+    elif key == getattr(K, cfg["inv_remove_key"], None):
+        inventory_hotkey("remove")
     elif key == K.home:
         state["select_area"] = True
     elif key == K.delete:
@@ -646,8 +693,8 @@ def yellow_buttons(bgr):
     return buttons
 
 
-def find_menu(bgr):
-    """('select', left SELECT button) or ('panel', credit button) or None."""
+def find_menu(bgr, side=None):
+    """('select', SELECT button of the chosen droid) or ('panel', credit button) or None."""
     buttons = yellow_buttons(bgr)
     guide = [b for b in buttons if fuzzy_contains(b["text"], "GUIDE", 0.75)]
     if guide:
@@ -657,8 +704,35 @@ def find_menu(bgr):
             return "panel", max(above, key=lambda b: b["y"])
     selects = [b for b in buttons if fuzzy_contains(b["text"], "SELECT", 0.75)]
     if selects:
-        return "select", min(selects, key=lambda b: b["x"])
+        side = side or state.get("trait_side", "left")
+        pick = max if side == "right" else min
+        return "select", pick(selects, key=lambda b: b["x"])
     return None
+
+
+def droid_card_check(bgr, button):
+    """Is the droid above this SELECT button Iconic? -> 'iconic', 'ok' or 'unsure'."""
+    x, y, w, h = button["x"], button["y"], button["w"], button["h"]
+    reg = bgr[max(0, y - int(1.45 * h)):max(0, y - int(0.05 * h)), x:x + w]
+    if reg.size == 0:
+        return "unsure", ""
+    up = cv2.resize(reg, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    hsv, g = cv2.cvtColor(up, cv2.COLOR_BGR2HSV), cv2.cvtColor(up, cv2.COLOR_BGR2GRAY)
+    toks = []
+    for m in ((hsv[:, :, 1] < 70) & (hsv[:, :, 2] > 170), g < 70, hsv[:, :, 2] > 150):
+        toks += _ocr(255 - m.astype(np.uint8) * 255, 6).split()
+    words = [_sq(t) for t in toks if len(_sq(t)) >= 3]
+    name, sc = _match_name(" ".join(toks))
+    if any("ICONIC" in t or _ratio(t, "ICONIC") >= 0.75 for t in words):
+        return "iconic", name or ""
+    if name and sc >= 0.7 and DROID_RARITY.get(name) == "Iconic":
+        return "iconic", name
+    other = [r for r in RARITY_WORDS if r != "ICONIC"]
+    if any(r in t or _ratio(t, r) >= 0.8 for t in words for r in other):
+        return "ok", name or ""
+    if name and sc >= 0.85:
+        return "ok", name
+    return "unsure", name or ""
 
 
 def white_text(bgr, box, any_bright=False):
@@ -744,11 +818,11 @@ def traits_wait(seconds):
     return traits_active()
 
 
-def wait_for_menu(sct, want, timeout):
+def wait_for_menu(sct, want, timeout, side=None):
     """Wait until the given menu ('select' / 'panel' / either) shows up."""
     end = time.time() + timeout
     while time.time() < end and traits_active():
-        found = find_menu(grab_screen(sct))
+        found = find_menu(grab_screen(sct), side)
         if found and (want == "either" or found[0] == want):
             return found
         time.sleep(0.15)
@@ -759,6 +833,21 @@ def stop_traits(msg):
     state["enabled"] = False
     state["status"] = msg
     notify(msg, 30)
+
+
+def next_droid(msg):
+    """This droid is done (wanted trait / cost limit). Move to the next droid if 'Both'
+    was picked - returns True - otherwise stop and return False."""
+    if not state["trait_queue"]:
+        stop_traits(msg)
+        return False
+    pydirectinput.press("esc")                    # close this droid's trait panel
+    time.sleep(1.0)
+    state["trait_side"] = state["trait_queue"].pop(0)
+    state["side_checked"] = None
+    state["last_cost"] = None
+    notify(f"{msg}  Moving on to the {state['trait_side']} droid.", 10)
+    return True
 
 
 def trait_tier(bgr):
@@ -781,23 +870,19 @@ def trait_tier(bgr):
 
 
 def parse_amount(text):
-    """'67.20B' -> 67.2e9. Handles the game font's B being read as 8."""
-    t = text.upper().replace(" ", "").replace(",", ".")
+    """'67.20B' -> 67.2e9. Any number of decimals ('1.4T', '420.6B', '12B').
+    Handles the game font's B being read as 8 (e.g. '33.608' -> 33.60B)."""
+    t = re.sub(r"[^0-9A-Za-z.,]", "", text).upper().replace(",", ".")
     t = re.sub(r"[O0]A$", "QA", t).replace("0I", "QI")
-    m = re.match(r"^(\d+)\.(\d\d)([A-Z]*)(\d?)$", t)
+    m = re.match(r"^(\d+(?:\.\d+)?)([A-Z]*)$", t)
     if not m:
-        m2 = re.match(r"^(\d+)(\d\d)([A-Z]+)$", t)     # decimal point missed
-        if not m2:
-            return None
-        m = m2
-    whole, dec, suf, extra = m.group(1), m.group(2), m.group(3), (m.group(4) if m.re.groups > 3 else "")
-    if not suf and extra == "8":
-        suf = "B"
-    elif extra:
         return None
+    num, suf = m.group(1), m.group(2)
+    if not suf and "." in num and num[-1] in "68" and len(num.split(".")[1]) == 3:
+        num, suf = num[:-1], "B"                # "33.608" / "67.206" -> ...B
     if suf not in SUFFIX:
         return None
-    return float(f"{whole}.{dec}") * SUFFIX[suf]
+    return float(num) * SUFFIX[suf]
 
 
 def format_amount(value):
@@ -808,19 +893,36 @@ def format_amount(value):
 
 
 def read_cost(bgr, button):
-    """Read the credit amount on the roll button."""
+    """Read the credit amount on the roll button. The amount is centred, so the coin
+    moves with the number's length - find the coin and read what's right of it."""
     x, y, w, h = button["x"], button["y"], button["w"], button["h"]
-    crop = bgr[y:y + h, x + int(h * 2.4):x + w]     # skip the coin on the left
-    g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    g = cv2.resize(g, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-    _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    g = cv2.cvtColor(bgr[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)
+    _, dark = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    n, _, st, _ = cv2.connectedComponentsWithStats(dark)
+    comps = [tuple(st[i]) for i in range(1, n) if st[i][4] > 4]
+    coins = [c for c in comps if c[3] > 0.7 * h and c[2] > 0.5 * h]   # the round coin
+    coin_right = max((c[0] + c[2] for c in coins), default=0)
+    chars = [c for c in comps if c[0] >= coin_right - 1 and 0.3 * h < c[3] < 0.8 * h
+             and c[1] > 0 and c[1] + c[3] < h]
+    if not chars:
+        return None
+    x0 = max(0, min(c[0] for c in chars) - 4)
+    x1 = min(w, max(c[0] + c[2] for c in chars) + 4)
+    crop = g[:, x0:x1]
+    crop = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+    _, bw = cv2.threshold(crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     if bw.mean() < 127:
         bw = 255 - bw
     bw = cv2.copyMakeBorder(bw, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
-    text = pytesseract.image_to_string(
-        bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.KMBTQaiSxp").strip()
-    return parse_amount(text)
-
+    text = pytesseract.image_to_string(bw, config="--psm 8").strip()   # best for "67.20B"
+    value = parse_amount(text)
+    if value is None:
+        text2 = pytesseract.image_to_string(
+            bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.KMBTQaiSxp").strip()
+        value = parse_amount(text2)
+        if value is None:
+            print("Couldn't parse roll cost:", repr(text), repr(text2))
+    return value
 
 
 # ----------------------------------------------------------------- account ---
@@ -1201,12 +1303,29 @@ def run_traits(sct):
                 stop_traits("Couldn't open the droid menu - stand at the trait scanner")
                 return
 
-            # 2. Pick the left droid
+            # 2. Pick the droid (left or right) - never an Iconic one
+            side = state["trait_side"]
+            if found[0] != "select" and state["side_checked"] != side:
+                stop_traits("Couldn't see the Select Droid screen to check the droid's "
+                            "rarity - stopped to be safe")
+                return
             if found[0] == "select":
-                state["status"] = "Selecting left droid"
+                state["status"] = f"Selecting {side} droid"
                 if not traits_wait(0.4):          # let the menu finish its pop-in
                     return
                 settled = wait_for_menu(sct, "select", 1.5) or found
+                if state["side_checked"] != side:
+                    verdict, dname = droid_card_check(grab_screen(sct), settled[1])
+                    if verdict == "iconic":
+                        stop_traits(f"The {side} droid is Iconic ({dname or 'Iconic'}) - "
+                                    "never rolling Iconics. Stopped.")
+                        return
+                    if verdict == "unsure":
+                        stop_traits(f"Couldn't tell if the {side} droid is Iconic - "
+                                    "stopped to be safe")
+                        return
+                    state["side_checked"] = side
+                    state["trait_droid"] = dname
                 click_at(settled[1]["cx"], settled[1]["cy"])
                 found = wait_for_menu(sct, "panel", 3)
                 if not found and traits_active():
@@ -1244,15 +1363,19 @@ def run_traits(sct):
             state["trait"] = (name + tier) if name else (
                 (max(texts, key=len)[:30] + tier) if any(texts) else "(none yet)")
             if name and is_wanted(name, rainbow):
-                stop_traits(f"GOT {name.upper()}{tier.upper()}! "
-                            f"Stopped after {state['rolls']} rolls.")
+                if next_droid(f"GOT {name.upper()}{tier.upper()} on the {side} droid "
+                              f"after {state['rolls']} rolls!"):
+                    continue
                 return
-            if not name and cfg["stop_if_unreadable"] and could_be_wanted(rainbow):
+            if not name and not tier_name:      # grey "?" - this droid has no trait yet
+                state["trait"] = "(no trait yet)"
+            elif not name and cfg["stop_if_unreadable"] and could_be_wanted(rainbow):
                 stop_traits("Couldn't read this trait and it might be one you want - "
                             "stopped to be safe. Check it!")
                 return
             if cfg["max_rolls"] and state["rolls"] >= cfg["max_rolls"]:
-                stop_traits(f"Reached max_rolls ({cfg['max_rolls']}) - stopped.")
+                if next_droid(f"Reached max_rolls ({cfg['max_rolls']})."):
+                    continue
                 return
 
             # 4. Click the credit button and make sure the roll started
@@ -1261,22 +1384,26 @@ def run_traits(sct):
                 stop_traits("Lost the trait panel before rolling")
                 return
             cost = None
-            for _ in range(3):
+            for _ in range(5):
                 cost = read_cost(grab_screen(sct), panel[1])
                 if cost is not None:
                     break
                 time.sleep(0.2)
             state["cost"] = format_amount(cost) if cost is not None else "?"
+            if cost is not None:
+                state["last_cost"] = cost
             limit = parse_amount(cfg["max_cost"] if "." in cfg["max_cost"] else
                                  re.sub(r"^(\d+)", r"\1.00", cfg["max_cost"]))
             if cfg["max_cost"] != "off" and limit:
-                if cost is None:
+                last = state.get("last_cost")
+                if cost is None and not (last and last * 3 < limit):
                     stop_traits("Couldn't read the roll cost - stopped because the cost "
                                 "limit is on")
                     return
-                if cost > limit:
-                    stop_traits(f"Next roll costs {format_amount(cost)} - over your "
-                                f"{cfg['max_cost']} limit. Stopped.")
+                if cost is not None and cost > limit:
+                    if next_droid(f"Next roll on the {side} droid costs {format_amount(cost)} - "
+                                  f"over your {cfg['max_cost']} limit."):
+                        continue
                     return
             state["status"] = f"Rolling (#{state['rolls'] + 1}) \u00b7 {state['cost']}"
             click_at(panel[1]["cx"], panel[1]["cy"])
@@ -1308,6 +1435,423 @@ def run_traits(sct):
         stop_traits(f"Traits error: {e}")
 
 
+
+# ----------------------------------------------------------- droid reader ---
+# Reads a droid's name and variant from the in-game droid screen or from a
+# blueprint card, so it can be added to / removed from the website inventory.
+
+# Same list as the LMS Droid Tycoon website (name, type code, * = fusion only)
+DROID_RAW = {
+    "Common": "Gonk W,Mouse W,Pit W,R8 A,CB A,R3 A,R5 A,Imperial Probe B,B1 Battle B,ID10 B,DRK-1 Probe B",
+    "Rare": "EG-58 W,WHL-EX W*,BU-4D W,Senate Hovercam W,ARG W,ROLL-R W,Bal-Core W,BDX Explorer W,ZRO-TEC A*,R9 A,R4 A,A-LT A,2BB A,BTL-R B*,B1 Security B,HOV-R B,VECT-Arm B,NAV-EX B,SA-5 P",
+    "Epic": "EGL W,KT W,MPH A,N-UL W*,Gunrunner W,AMP Walker W,SEN-TRI W,Opti-Pod W,LO W,Groundmech W,SCRP-R A*,R2 A,TRAK-R A,R6 A,Util-Tec A,ORB-Walker A,BB A,OPT-AR B*,ARM-CORE B*,B1 Heavy B,Strike-Orb B,B2 Heavy B,LNG-Shot B,B2 Super B,Haul-R B,LOM P",
+    "Legendary": "JO9-4MN W,PLNK W,FUS-3 W*,RO-TOR W*,Mono-WLKR W,Mecha-Droid W,Proto-Roller W,QIK-BIT A*,R7 A,BB9 A,ORB-XL B*,Opti-STRK B,B2-RP B,Cyclo-Grav B,PZ P",
+    "Mythic": "ECG A,LOW-MO W*,RIV-3T W*,LUG-G W*,Loadlifter W,LEP W,RIC-1200 W,RIC W,Snow Mouse W,AXI-POD A*,MO-TRAK A,TRI-TEK A,DRFT-R A,CYCLENS A,X-ONK B*,SRV-O B*,KX B,IG B,TDA P",
+    "Iconic": "WG-22 B,D-O W,DJ R-3X W,BB-8 A,CB-23 A,Chopper A,R2-D2 A,IG-11 Marshal B,Mister Bones B,C-3PO P",
+}
+DROID_RARITY = {x[:x.rfind(" ")]: r for r, s in DROID_RAW.items() for x in s.split(",")}
+DROID_NAMES = list(DROID_RARITY)
+VARIANTS = ["DEFAULT", "GOLD", "DIAMOND", "RAINBOW", "BESKAR", "GALACTIC", "STELLAR", "KYBER"]
+VARIANT_LABEL = {"DEFAULT": "Basic", "GOLD": "Gold", "DIAMOND": "Diamond", "RAINBOW": "Rainbow",
+                 "BESKAR": "Beskar", "GALACTIC": "Galactic", "STELLAR": "Stellar", "KYBER": "Kyber"}
+RARITY_WORDS = ["COMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC", "ICONIC"]
+_UP = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_NAME_WL = _UP + "0123456789-"
+
+
+def _sq(t):
+    return re.sub(r"[^A-Z0-9]", "", t.upper())
+
+
+def _ratio(a, b):
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _best(word, options, cut):
+    r = max(((_ratio(word, o), o) for o in options), default=(0, None))
+    return r[1] if r[0] >= cut else None
+
+
+def _ocr(img, psm=7, wl=None):
+    cfg_ = f"--psm {psm}" + (f" -c tessedit_char_whitelist={wl}" if wl else "")
+    img = cv2.copyMakeBorder(img, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
+    return pytesseract.image_to_string(img, config=cfg_).upper()
+
+
+def _match_name(text, pool=None):
+    toks = [_sq(t) for t in text.split() if _sq(t)]
+    cands = toks + [a + b for a, b in zip(toks, toks[1:])] + ["".join(toks)]
+    sc, name = 0, None
+    for n in (pool or DROID_NAMES):
+        for t in cands:
+            q = _ratio(t, _sq(n))
+            if q > sc:
+                sc, name = q, n
+    return name, sc
+
+
+def _color_masks(hsv):
+    H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    return {"white": (S < 60) & (V > 170), "gray": (S < 50) & (V > 110) & (V < 200),
+            "yellow": (H >= 15) & (H <= 35) & (S > 90) & (V > 150),
+            "blue": (H >= 92) & (H <= 118) & (S > 100) & (V > 100),
+            "lavender": (H >= 118) & (H <= 168) & (S > 30) & (V > 140),
+            "red": ((H <= 10) | (H >= 169)) & (S > 90) & (V > 120)}
+
+
+# which variants each text colour can mean
+_COLOR_VARS = {"white": ["DEFAULT", "KYBER"], "gray": ["BESKAR"], "yellow": ["STELLAR", "GOLD"],
+               "blue": ["DIAMOND"], "lavender": ["GALACTIC"], "red": ["RAINBOW"]}
+
+
+def _variant_from_line(line, h):
+    """Read the coloured variant word (left of the rarity pill) on a line image."""
+    up = cv2.resize(line, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC)
+    hsv = cv2.cvtColor(up, cv2.COLOR_BGR2HSV)
+    masks = _color_masks(hsv)
+    # cut off the rarity pill (solid coloured blob right of the word)
+    sat = ((hsv[:, :, 1] > 70) & (hsv[:, :, 2] > 140)).astype(np.uint8)
+    sat = cv2.morphologyEx(sat, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    n, _, st, _ = cv2.connectedComponentsWithStats(sat)
+    pills = [st[i] for i in range(1, n) if st[i][4] > 0.55 * st[i][2] * st[i][3]
+             and st[i][2] > 1.8 * st[i][3] and st[i][3] > 0.35 * up.shape[0]
+             and st[i][0] > 0.15 * up.shape[1]]
+    if pills:
+        cut = min(p[0] for p in pills)
+        for k in masks:
+            masks[k][:, cut:] = False
+    # the variant word = first run of text columns
+    textm = np.zeros(up.shape[:2], bool)
+    for k in _COLOR_VARS:
+        textm |= masks[k]
+    cols = textm.any(axis=0)
+    runs, start, last, gap = [], None, None, int(0.45 * h * 5)
+    for i, c in enumerate(cols):
+        if c:
+            if start is None:
+                start = i
+            elif i - last > gap:
+                runs.append((start, last))
+                start = i
+            last = i
+    if start is not None:
+        runs.append((start, last))
+    word = None
+    if runs:
+        word = runs[0]
+        if word[1] - word[0] < 2 * h * 5 and len(runs) > 1:
+            word = (runs[0][0], runs[1][1])
+    sl = slice(max(0, word[0] - 5), word[1] + 5) if word else slice(None)
+    counts = {k: int(masks[k][:, sl].sum()) for k in _COLOR_VARS}
+    total = sum(counts.values()) or 1
+    allowed = set()
+    for k, c in counts.items():
+        if c > 0.2 * total:
+            allowed.update(_COLOR_VARS[k])
+    if sum(1 for k in ("yellow", "blue", "lavender", "red") if counts[k] > 0.15 * total) >= 2:
+        allowed.add("RAINBOW")
+    if not allowed:
+        allowed = set(VARIANTS)
+    best_v, best_s = None, 0
+    any_bright = hsv[:, :, 2] > 140
+    if pills:
+        any_bright[:, cut:] = False
+    for m in list(masks.values()) + [any_bright]:
+        mm = m.copy()
+        if word:
+            mm[:, :max(0, word[0] - 5)] = False
+            mm[:, word[1] + 5:] = False
+        for tok in _ocr(255 - mm.astype(np.uint8) * 255, 7, _UP + " ").split():
+            s = _sq(tok)
+            if len(s) < 3:
+                continue
+            for v in VARIANTS:
+                q = max(_ratio(s, v), 1.0 if v in s else 0)
+                if v not in allowed and q < 0.85:     # colour must agree unless near-exact
+                    continue
+                if q > best_s:
+                    best_s, best_v = q, v
+    if best_s >= 0.5:
+        return best_v
+    return next(iter(allowed)) if len(allowed) == 1 else None
+
+
+def _companions_bar(bgr):
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    m = cv2.inRange(hsv, (95, 150, 150), (110, 255, 255))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
+    n, _, st, _ = cv2.connectedComponentsWithStats(m)
+    best = None
+    for i in range(1, n):
+        x, y, w, h, a = st[i]
+        if w > 6 * h and w > 150 and a / (w * h) > 0.6 and (best is None or w > best[2]):
+            best = (x, y, w, h)
+    return best
+
+
+def _read_droid_screen(bgr):
+    """The droid screen (WORK / SWAP / FUSION ... menu with COMPANIONS below)."""
+    b = _companions_bar(bgr)
+    if not b:
+        return None
+    x, y, w, h = b
+    right = x + w
+    W = int(10.6 * h)
+    left = right - W
+    top, bot = max(0, y - int(1.15 * W)), y - int(0.72 * W)
+    reg = bgr[top:bot, max(0, left + int(0.05 * W)):right - int(0.1 * W)]
+    if reg.size == 0:
+        return None
+    R = reg.shape[0]
+    line, namez = reg[int(0.80 * R):R], reg[int(0.30 * R):int(0.80 * R)]
+    up = cv2.resize(line, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    ug, uh = cv2.cvtColor(up, cv2.COLOR_BGR2GRAY), cv2.cvtColor(up, cv2.COLOR_BGR2HSV)
+    H_, S_, V_ = uh[:, :, 0], uh[:, :, 1], uh[:, :, 2]
+    masks = [ug < 70, (S_ < 90) & (V_ > 150), V_ > 200, (S_ > 80) & (V_ > 120),
+             (H_ >= 92) & (H_ <= 118) & (S_ > 110) & (V_ > 110),
+             (H_ >= 120) & (H_ <= 170) & (S_ > 35) & (V_ > 160),
+             (H_ >= 18) & (H_ <= 34) & (S_ > 90) & (V_ > 190),
+             (S_ < 45) & (V_ > 110) & (V_ < 235), (H_ >= 70) & (H_ <= 95) & (S_ > 80) & (V_ > 120)]
+    rar = var = None
+    for m in masks:
+        for tok in _ocr(255 - m.astype(np.uint8) * 255, 7, _UP + " ").split():
+            s = _sq(tok)
+            if len(s) < 3:
+                continue
+            rar = rar or _best(s, RARITY_WORDS, 0.75)
+            var = var or _best(s, VARIANTS, 0.7)
+            var = var or next((v for v in VARIANTS if v in s), None)
+            rar = rar or next((r for r in RARITY_WORDS if r in s), None)
+        if rar and var:
+            break
+    nh = cv2.cvtColor(namez, cv2.COLOR_BGR2HSV)
+    wm = ((nh[:, :, 1] < 70) & (nh[:, :, 2] > 200)).astype(np.uint8) * 255
+    pool = [n for n, r in DROID_RARITY.items() if not rar or r.upper() == rar]
+    name, sc = _match_name(_ocr(255 - wm, 7) + " " + _ocr(255 - wm, 8), pool)
+    if sc < 0.5:
+        return None
+    return {"name": name, "variant": var, "source": "droid screen"}
+
+
+def _name_rows(bgr):
+    """Rows of big white letters on black (blueprint card names)."""
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    white = ((hsv[:, :, 1] < 70) & (hsv[:, :, 2] > 200)).astype(np.uint8)
+    dark = (hsv[:, :, 2] < 55).astype(np.uint8)
+    n, _, st, _ = cv2.connectedComponentsWithStats(white)
+    chars = []
+    for i in range(1, n):
+        x, y, w, h, a = st[i]
+        if not (9 <= h <= 90 and w <= 2.2 * h and a > 12):
+            continue
+        ring = dark[max(0, y - h // 3):y + h + h // 3, max(0, x - h // 2):x + w + h // 2].mean()
+        if ring > 0.35:
+            chars.append((x, y, w, h))
+    rows = []
+    for c in sorted(chars):
+        for r in rows:
+            last = r[-1]
+            if (abs((c[1] + c[3] / 2) - (last[1] + last[3] / 2)) < 0.4 * last[3]
+                    and 0.7 < c[3] / last[3] < 1.4 and c[0] - (last[0] + last[2]) < 1.2 * last[3]):
+                r.append(c)
+                break
+        else:
+            rows.append([c])
+    rows = [r for r in rows if len(r) >= 2]
+    rows.sort(key=lambda r: len(r) * np.mean([c[3] for c in r]), reverse=True)
+    return rows[:6]
+
+
+def _read_card(bgr):
+    """A blueprint card (in the shop or on the ground)."""
+    H, W = bgr.shape[:2]
+    out = []
+    for r in _name_rows(bgr):
+        cs = np.array([(c[0] + c[2] / 2, c[1] + c[3] / 2) for c in r])
+        h = float(np.median([c[3] for c in r]))
+        ang = np.degrees(np.arctan(np.polyfit(cs[:, 0], cs[:, 1], 1)[0])) if len(r) >= 3 else 0.0
+        x0, x1 = min(c[0] for c in r), max(c[0] + c[2] for c in r)
+        cy, cx = float(cs[:, 1].mean()), (x0 + x1) / 2
+        rot = cv2.warpAffine(bgr, cv2.getRotationMatrix2D((cx, cy), ang, 1.0), (W, H),
+                             flags=cv2.INTER_CUBIC, borderValue=(0, 0, 0))
+        ni = rot[max(0, int(cy - 0.8 * h)):min(H, int(cy + 0.8 * h)),
+                 max(0, int(x0 - 0.4 * h)):min(W, int(x1 + 0.4 * h))]
+        if ni.size == 0:
+            continue
+        nu = cv2.resize(ni, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        nh = cv2.cvtColor(nu, cv2.COLOR_BGR2HSV)
+        wm = ((nh[:, :, 1] < 70) & (nh[:, :, 2] > 180)).astype(np.uint8) * 255
+        name, sc = _match_name(_ocr(255 - wm, 7, _NAME_WL + " ") + " " + _ocr(255 - wm, 8, _NAME_WL))
+        if sc < 0.6:
+            continue
+        line = rot[min(H - 1, int(cy + 0.55 * h)):min(H, int(cy + 1.6 * h)),
+                   max(0, int(x0 - 0.4 * h)):min(W, int(x0 + max(5.5 * h, (x1 - x0) * 0.9)))]
+        var = _variant_from_line(line, 0.5 * h) if line.size else None
+        if not var:
+            continue                                 # not sure it's a card - skip
+        centre = abs(cx - W / 2) / W + abs(cy - H / 2) / H     # prefer the card you're looking at
+        out.append((sc, var is not None, -centre, {"name": name, "variant": var, "source": "blueprint"}))
+    out.sort(key=lambda o: o[:3], reverse=True)
+    return out[0][3] if out else None
+
+
+def read_droid(bgr):
+    """{'name', 'variant', 'source'} for the droid on screen, or None."""
+    return _read_droid_screen(bgr) or _read_card(bgr)
+
+# -------------------------------------------------------------- inventory ---
+# F9 = add the droid on screen to your website inventory, F10 = remove it.
+# Press once to read it, again within 8 seconds to confirm.
+
+VARIANT_KEY = {"DEFAULT": "0", "GOLD": "1", "DIAMOND": "2", "RAINBOW": "3",
+               "BESKAR": "4", "GALACTIC": "5", "STELLAR": "6"}
+KYBER_KEYS = ["7n", "7g", "7b", "7p"]
+KYBER_NAMES = {"n": "Not Activated", "g": "Green", "b": "Blue", "p": "Purple"}
+_players = {"list": []}
+
+
+def _fs_value(v):
+    """Firestore REST value -> Python."""
+    if "integerValue" in v:
+        return int(v["integerValue"])
+    if "doubleValue" in v:
+        return v["doubleValue"]
+    if "stringValue" in v:
+        return v["stringValue"]
+    if "booleanValue" in v:
+        return v["booleanValue"]
+    if "mapValue" in v:
+        return {k: _fs_value(x) for k, x in v["mapValue"].get("fields", {}).items()}
+    if "arrayValue" in v:
+        return [_fs_value(x) for x in v["arrayValue"].get("values", [])]
+    return None
+
+
+def list_players():
+    """The website players on this login: [{'id', 'name'}]."""
+    r = _http(_firestore_base() + f"/users/{_account['uid']}/players?pageSize=50", token=id_token())
+    out = []
+    for d in r.get("documents", []):
+        pid = d["name"].rsplit("/", 1)[-1]
+        name = d.get("fields", {}).get("name", {}).get("stringValue", pid)
+        out.append({"id": pid, "name": name})
+    out.sort(key=lambda p: p["name"].lower())
+    _players["list"] = out
+    return out
+
+
+def current_player():
+    pl = _players["list"] or list_players()
+    if not pl:
+        return None
+    return next((p for p in pl if p["id"] == cfg["inventory_player"]), pl[0])
+
+
+def variant_label(variant, key=None):
+    if variant == "KYBER":
+        k = (key or "7" + cfg["kyber_default"])[1:]
+        return f"Kyber ({KYBER_NAMES.get(k, k)})" if k == "n" else f"Kyber {KYBER_NAMES.get(k, k)}"
+    return VARIANT_LABEL.get(variant, variant.title())
+
+
+def change_inventory(name, variant, delta):
+    """Add (+1) or remove (-1) one droid on the website. Returns a message."""
+    player = current_player()
+    if not player:
+        return "No players on your website login yet - add one on the site first."
+    url = _firestore_base() + f"/users/{_account['uid']}/players/{player['id']}"
+    doc = _http(url, token=id_token())
+    inv = _fs_value(doc.get("fields", {}).get("inv", {"mapValue": {}})) or {}
+    entry = dict(inv.get(name, {}))
+    if DROID_RARITY.get(name) == "Iconic":
+        key, label = "0", ""
+    elif variant == "KYBER":
+        if delta > 0:
+            key = "7" + cfg["kyber_default"]
+        else:
+            key = next((k for k in KYBER_KEYS if entry.get(k, 0) > 0), None)
+        label = variant_label(variant, key) + " "
+    else:
+        key, label = VARIANT_KEY[variant], variant_label(variant) + " "
+    if delta < 0 and (not key or entry.get(key, 0) <= 0):
+        return f"{player['name']} has no {label}{name} to remove."
+    new = max(0, min(999, entry.get(key, 0) + delta))
+    if new:
+        entry[key] = new
+    else:
+        entry.pop(key, None)
+    # only this droid's entry (and updatedAt) is changed - the rest of the save is untouched
+    inv_fields = {}
+    if entry:
+        inv_fields[name] = {"mapValue": {"fields": {k: {"integerValue": str(c)}
+                                                    for k, c in entry.items()}}}
+    body = {"fields": {"inv": {"mapValue": {"fields": inv_fields}},
+                       "updatedAt": {"integerValue": str(int(time.time() * 1000))}}}
+    import urllib.parse
+    mask = "updateMask.fieldPaths=" + urllib.parse.quote(f"inv.`{name}`") + \
+           "&updateMask.fieldPaths=updatedAt"
+    _http(url + "?" + mask, body, token=id_token(), method="PATCH")
+    verb = "Added" if delta > 0 else "Removed"
+    return f"{verb} {label}{name} – {player['name']} now has {new}"
+
+
+def inventory_hotkey(action):
+    """Called from the hotkey listener: read the droid, then confirm on a 2nd press."""
+    if state.get("inv_busy"):
+        return
+    if not accounts_enabled() or not _account["refresh"]:
+        notify("Sign in to use the inventory keys", 4)
+        return
+    if _account.get("offline"):
+        notify("Offline - inventory changes need internet", 4)
+        return
+    pend = state.get("inv_pending")
+    key_name = cfg["inv_add_key" if action == "add" else "inv_remove_key"].upper()
+
+    def work():
+        state["inv_busy"] = True
+        try:
+            if pend and pend["action"] == action and time.time() < pend["expires"]:
+                state["inv_pending"] = None
+                notify("Saving…", 3)
+                notify(change_inventory(pend["name"], pend["variant"],
+                                        1 if action == "add" else -1), 6)
+                return
+            notify("Reading droid…", 4)
+            with mss.mss() as sct:
+                img = grab_screen(sct)
+            r = read_droid(img)
+            if not r:
+                notify("No droid found - open the droid screen or look straight at a "
+                       "blueprint card, then try again", 6)
+                return
+            if not r["variant"]:
+                notify(f"Found {r['name']} but couldn't read its variant - try again", 6)
+                return
+            player = current_player()
+            if not player:
+                notify("No players on your website login yet", 5)
+                return
+            label = "" if DROID_RARITY.get(r["name"]) == "Iconic" else variant_label(r["variant"]) + " "
+            state["inv_pending"] = {"action": action, "name": r["name"], "variant": r["variant"],
+                                    "expires": time.time() + 8}
+            verb = "Add" if action == "add" else "Remove"
+            prep = "to" if action == "add" else "from"
+            notify(f"{verb} {label}{r['name']} {prep} {player['name']}? "
+                   f"Press {key_name} again to confirm", 8)
+        except AuthError as e:
+            notify(f"Website said no: {e}", 6)
+        except OSError:
+            notify("Couldn't reach the website - check your internet", 6)
+        except Exception as e:
+            print("Inventory error:", e)
+            notify(f"Inventory error: {e}", 6)
+        finally:
+            state["inv_busy"] = False
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 # ------------------------------------------------------------ auto clicker ---
 
 def foreground_title():
@@ -1324,7 +1868,7 @@ def foreground_title():
 
 
 def run_clicker():
-    """Left-click continuously at the current mouse position while it's on."""
+    """Scrap Hit: left-click continuously. Potion Grab: press F every few seconds."""
     next_click = time.perf_counter()
     while state["enabled"] and state["mode"] == "clicker" and not state["quit"]:
         want = cfg["clicker_window"].strip().lower()
@@ -1332,6 +1876,15 @@ def run_clicker():
             state["status"] = f"Paused - {cfg['clicker_window']} isn't in front"
             time.sleep(0.25)
             next_click = time.perf_counter()
+            continue
+        if cfg["clicker_kind"] == "potion":
+            press(cfg["interact_key"])
+            state["clicks"] += 1
+            end = time.time() + cfg["potion_interval"]
+            while (time.time() < end and state["enabled"] and state["mode"] == "clicker"
+                   and not state["quit"] and cfg["clicker_kind"] == "potion"):
+                state["status"] = f"Pressed F \u00b7 next in {end - time.time():.0f}s"
+                time.sleep(0.1)
             continue
         state["status"] = "Clicking"
         pydirectinput.mouseDown()
@@ -1481,16 +2034,27 @@ def run_windows():
         if state["select_area"]:
             state["select_area"] = False
             select_area(root)
-        timeout = 10 if state["menu_stage"] == "mode" else 60
+        timeout = 10 if state["menu_stage"] in ("mode", "clicker", "droids") else 60
         if state["menu_open"] and time.time() - state["menu_time"] > timeout:
             state["menu_open"] = False            # menu times out if nothing is picked
         mode = state["mode"].upper()
-        picking = state["menu_open"] and state["menu_stage"] == "traits"
+        picking = state["menu_open"] and state["menu_stage"] in ("traits", "droids", "clicker")
         if picking and not picker.winfo_ismapped():
             picker.pack(after=title, fill="x", pady=(4, 2))
         elif not picking and picker.winfo_ismapped():
             picker.pack_forget()
-        if picking:
+        if picking and state["menu_stage"] in ("droids", "clicker"):
+            stage = state["menu_stage"]
+            choices = DROID_CHOICES if stage == "droids" else CLICKER_CHOICES
+            title.config(text="TRAITS \u2013 WHICH DROID?" if stage == "droids"
+                         else "AUTO CLICKER \u2013 WHICH ONE?", fg=FG)
+            picker.config(text="\n".join(("\u25b6 " if i == state["choice_index"] else "  ") + label
+                                         for i, (_, label) in enumerate(choices)))
+            reading.config(text="")
+            pressed.config(text="")
+            stats.config(text="Iconic droids are never rolled." if stage == "droids" else "")
+            hints.config(text="Up/Down choose \u00b7 Insert next")
+        elif picking:
             title.config(text="TRAITS \u2013 STOP ON WHICH?", fg=FG)
             badge = {"off": "  \u00b7  ", "any": " ANY ", "rainbow": "RAINBOW"}
             lines = []
@@ -1525,18 +2089,26 @@ def run_windows():
             if state["mode"] == "traits":
                 reading.config(text=f"Trait: {state['trait'] or DASH}")
                 spent = f" \u00b7 spent {format_amount(state['spent'])}" if state["spent"] else ""
-                pressed.config(text=f"Rolls: {state['rolls']}{spent} \u00b7 "
+                droid = state["trait_side"].title() + (
+                    f" ({state.get('trait_droid')})" if state.get("trait_droid") else "")
+                pressed.config(text=f"{droid} droid \u00b7 Rolls: {state['rolls']}{spent} \u00b7 "
                                     f"{state['status'] or DASH}")
                 limit = cfg["max_cost"] if cfg["max_cost"] != "off" else "no limit"
                 stats.config(text=f"Stops on: {wanted_summary()} \u00b7 cost limit {limit}\n"
                                   + stats_summary(), wraplength=440)
             elif state["mode"] == "clicker":
-                reading.config(text=f"Clicks: {state['clicks']:,}")
-                pressed.config(text=f"Speed: {cfg['clicker_cps']}/s \u00b7 "
-                                    f"{state['status'] or DASH}")
                 where = (f"only while {cfg['clicker_window']} is in front"
                          if cfg["clicker_window"] else "anywhere")
-                stats.config(text=f"Clicks where your mouse is, {where}", wraplength=440)
+                if cfg["clicker_kind"] == "potion":
+                    reading.config(text=f"Potion Grab \u00b7 F presses: {state['clicks']:,}")
+                    pressed.config(text=f"Every {cfg['potion_interval']}s \u00b7 "
+                                        f"{state['status'] or DASH}")
+                    stats.config(text=f"Presses F {where}", wraplength=440)
+                else:
+                    reading.config(text=f"Scrap Hit \u00b7 Clicks: {state['clicks']:,}")
+                    pressed.config(text=f"Speed: {cfg['clicker_cps']}/s \u00b7 "
+                                        f"{state['status'] or DASH}")
+                    stats.config(text=f"Clicks where your mouse is, {where}", wraplength=440)
             else:
                 reading.config(text=f"Reading: {state['reading'] or DASH}")
                 pressed.config(text=f"Pressed: {state['pressed'] or DASH}")
@@ -1545,7 +2117,8 @@ def run_windows():
                                   f"Delay {int(cfg['press_delay'] * 1000)} ms \u00b7 "
                                   f"Inputs {state['inputs']} \u00b7 Area {area}")
             hints.config(text="Insert menu/start/stop \u00b7 PgUp/PgDn faster/slower\n"
-                              "Home set area \u00b7 Delete debug pics \u00b7 End quit")
+                              f"{cfg['inv_add_key'].upper()}/{cfg['inv_remove_key'].upper()} add/remove droid "
+                              "\u00b7 Home set area \u00b7 End quit")
         message.config(text=state["error"] or state["message"],
                        fg=RED if state["error"] else DIM)
         full = cfg["overlay"] and (
@@ -1699,10 +2272,32 @@ def start_tray():
 
     account_items = []
     if accounts_enabled() and _account["username"]:
+        try:
+            if not _account.get("offline"):
+                list_players()
+        except Exception as e:
+            print("Couldn't load website players:", e)
+
+        def pick(pid):
+            def handler(icon, item):
+                cfg["inventory_player"] = pid
+                save_config()
+                name = next((p["name"] for p in _players["list"] if p["id"] == pid), pid)
+                notify(f"F9/F10 now update {name}'s inventory", 4)
+            return handler
+
+        def is_current(pid):
+            return lambda item: (current_player() or {}).get("id") == pid
+
+        player_items = [pystray.MenuItem(p["name"], pick(p["id"]), checked=is_current(p["id"]),
+                                         radio=True) for p in _players["list"]]
         account_items = [
             pystray.MenuItem(f"Signed in as {_account['username']}", None, enabled=False),
-            pystray.MenuItem("Sign out", do_sign_out),
         ]
+        if player_items:
+            account_items.append(pystray.MenuItem("Inventory player (F9/F10)",
+                                                  pystray.Menu(*player_items)))
+        account_items.append(pystray.MenuItem("Sign out", do_sign_out))
     menu = pystray.Menu(
         pystray.MenuItem(f"SW Key Helper v{VERSION}", None, enabled=False),
         *account_items,

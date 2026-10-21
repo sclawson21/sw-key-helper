@@ -1,0 +1,91 @@
+# Builds "SW Key Helper.exe" (with Tesseract inside) and publishes it as a release
+# whenever key_helper.py changes on GitHub. Raise VERSION in key_helper.py to
+# publish a new version - if the version already exists, nothing is published.
+name: Build and release SW Key Helper
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "key_helper.py"
+      - "SW Key Helper.ico"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read VERSION from key_helper.py
+        id: ver
+        shell: bash
+        run: |
+          v=$(sed -n 's/^VERSION = "\([^"]*\)".*/\1/p' key_helper.py | tr -d '\r')
+          echo "Version: $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if this version is already published
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" >/dev/null 2>&1; then
+            echo "v${{ steps.ver.outputs.version }} already exists - raise VERSION to publish."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.exists == 'false'
+        with:
+          python-version: "3.12"
+
+      - name: Check the code for mistakes (stops broken releases)
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          python -m pip install pyflakes
+          python -m pyflakes key_helper.py
+
+      - name: Install Tesseract
+        if: steps.check.outputs.exists == 'false'
+        run: choco install tesseract -y --no-progress
+
+      - name: Install Python packages
+        if: steps.check.outputs.exists == 'false'
+        run: python -m pip install pyinstaller mss opencv-python numpy pytesseract pydirectinput pynput pystray pillow
+
+      - name: Build SW Key Helper.exe
+        if: steps.check.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          $tess = @("C:\Program Files\Tesseract-OCR", "C:\Program Files (x86)\Tesseract-OCR") |
+                  Where-Object { Test-Path "$_\tesseract.exe" } | Select-Object -First 1
+          if (-not $tess) { throw "Tesseract wasn't installed" }
+          Write-Host "Packing Tesseract from $tess"
+          python -m PyInstaller --noconfirm --onefile --noconsole --uac-admin `
+            --name "SW Key Helper" `
+            --icon "SW Key Helper.ico" `
+            --hidden-import pynput.keyboard._win32 `
+            --hidden-import pynput.mouse._win32 `
+            --hidden-import pystray._win32 `
+            --add-data "SW Key Helper.ico;." `
+            --add-data "$tess;tesseract" `
+            key_helper.py
+
+      - name: Publish release
+        if: steps.check.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          gh release create "v$v" "dist/SW Key Helper.exe" \
+            --title "SW Key Helper v$v" \
+            --notes "SW Key Helper v$v - everyone's copy updates itself on next start."
