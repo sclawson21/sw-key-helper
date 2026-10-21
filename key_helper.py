@@ -197,7 +197,8 @@ state = {
     "trait": "", "rolls": 0, "status": "",
     "menu_stage": "mode", "pick_index": 0, "choice_index": 0,
     "trait_queue": [], "trait_side": "left", "side_checked": None,
-    "inv_pending": None, "inv_busy": False,
+    "inv_pending": None, "inv_busy": False, "inv_lines": [], "inv_until": 0.0,
+    "inv_color": None, "capture_hide": False,
     "clicks": 0, "spent": 0.0, "cost": "", "pending_roll": None, "roll_times": [],
 }
 MODES = ["fishing", "traits", "clicker"]
@@ -256,6 +257,7 @@ def start_mode():
                                 "both": ["left", "right"]}.get(cfg["trait_droids"], ["left"])
         state["trait_side"] = state["trait_queue"].pop(0)
         state["side_checked"] = None
+        state["trait_droid"] = ""
         fetch_shared()
     state["enabled"] = True
     notify(f"{state['mode'].title()} started")
@@ -710,8 +712,42 @@ def find_menu(bgr, side=None):
     return None
 
 
+def pill_rarity(reg):
+    """Rarity from the colour of the rarity pill on a droid card.
+    Iconic = pale cream-yellow, Legendary = vivid orange, Mythic = pink, Epic = violet,
+    Rare = blue, Common = grey."""
+    hsv = cv2.cvtColor(reg, cv2.COLOR_BGR2HSV)
+    for kind, mask in (("colour", (hsv[:, :, 1] > 60) & (hsv[:, :, 2] > 150)),
+                       ("grey", (hsv[:, :, 1] < 40) & (hsv[:, :, 2] > 170))):
+        n, lab, st, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8))
+        best = None
+        for i in range(1, n):
+            x, y, w, h, a = st[i]
+            if w < 20 or h < 6 or not (1.8 < w / h < 8) or a / (w * h) < 0.5:
+                continue
+            if y < reg.shape[0] * 0.35:                # the pill is on the lower line
+                continue
+            if best is None or a > best[1]:
+                best = (i, a)
+        if not best:
+            continue
+        if kind == "grey":
+            return "COMMON"
+        px = hsv[lab == best[0]]
+        hue, sat = int(np.median(px[:, 0])), int(np.median(px[:, 1]))
+        if 8 <= hue <= 34:
+            return "LEGENDARY" if sat >= 185 else "ICONIC"
+        if 140 <= hue <= 178:
+            return "MYTHIC"
+        if 118 <= hue < 140:
+            return "EPIC"
+        if 88 <= hue < 118:
+            return "RARE"
+    return None
+
+
 def droid_card_check(bgr, button):
-    """Is the droid above this SELECT button Iconic? -> 'iconic', 'ok' or 'unsure'."""
+    """Is the droid above this SELECT button Iconic? -> ('iconic'|'ok'|'unsure', name)."""
     x, y, w, h = button["x"], button["y"], button["w"], button["h"]
     reg = bgr[max(0, y - int(1.45 * h)):max(0, y - int(0.05 * h)), x:x + w]
     if reg.size == 0:
@@ -723,16 +759,22 @@ def droid_card_check(bgr, button):
         toks += _ocr(255 - m.astype(np.uint8) * 255, 6).split()
     words = [_sq(t) for t in toks if len(_sq(t)) >= 3]
     name, sc = _match_name(" ".join(toks))
-    if any("ICONIC" in t or _ratio(t, "ICONIC") >= 0.75 for t in words):
-        return "iconic", name or ""
-    if name and sc >= 0.7 and DROID_RARITY.get(name) == "Iconic":
-        return "iconic", name
+    shown = name if name and sc >= 0.7 else ""
+    rarity = pill_rarity(reg)
+    # Iconic if the pill colour, the word ICONIC or the droid's name says so
+    if (rarity == "ICONIC" or any("ICONIC" in t or _ratio(t, "ICONIC") >= 0.75 for t in words)
+            or (name and sc >= 0.8 and DROID_RARITY.get(name) == "Iconic")):
+        return "iconic", shown or "Iconic"
+    if rarity:
+        pool = [n for n, r in DROID_RARITY.items() if r.upper() == rarity]
+        n2, s2 = _match_name(" ".join(toks), pool)
+        return "ok", (n2 if n2 and s2 >= 0.8 else "")
     other = [r for r in RARITY_WORDS if r != "ICONIC"]
     if any(r in t or _ratio(t, r) >= 0.8 for t in words for r in other):
-        return "ok", name or ""
+        return "ok", shown
     if name and sc >= 0.85:
-        return "ok", name
-    return "unsure", name or ""
+        return "ok", shown
+    return "unsure", shown
 
 
 def white_text(bgr, box, any_bright=False):
@@ -845,6 +887,7 @@ def next_droid(msg):
     time.sleep(1.0)
     state["trait_side"] = state["trait_queue"].pop(0)
     state["side_checked"] = None
+    state["trait_droid"] = ""
     state["last_cost"] = None
     notify(f"{msg}  Moving on to the {state['trait_side']} droid.", 10)
     return True
@@ -892,6 +935,16 @@ def format_amount(value):
     return f"{value:.0f}"
 
 
+def fix_cost_decimals(text):
+    """The roll button always shows 2 decimals ("1.35T"). OCR sometimes drops the small
+    dot ("135T"), which would read 100x too high - put it back."""
+    t = re.sub(r"[^0-9A-Za-z.,]", "", text).replace(",", ".")
+    m = re.match(r"^(\d{3,})([A-Za-z]+)$", t)
+    if m:
+        return f"{m.group(1)[:-2]}.{m.group(1)[-2:]}{m.group(2)}"
+    return t
+
+
 def read_cost(bgr, button):
     """Read the credit amount on the roll button. The amount is centred, so the coin
     moves with the number's length - find the coin and read what's right of it."""
@@ -914,11 +967,11 @@ def read_cost(bgr, button):
     if bw.mean() < 127:
         bw = 255 - bw
     bw = cv2.copyMakeBorder(bw, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
-    text = pytesseract.image_to_string(bw, config="--psm 8").strip()   # best for "67.20B"
+    text = fix_cost_decimals(pytesseract.image_to_string(bw, config="--psm 8").strip())
     value = parse_amount(text)
     if value is None:
-        text2 = pytesseract.image_to_string(
-            bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.KMBTQaiSxp").strip()
+        text2 = fix_cost_decimals(pytesseract.image_to_string(
+            bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.KMBTQaiSxp").strip())
         value = parse_amount(text2)
         if value is None:
             print("Couldn't parse roll cost:", repr(text), repr(text2))
@@ -1401,6 +1454,15 @@ def run_traits(sct):
                                 "limit is on")
                     return
                 if cost is not None and cost > limit:
+                    # make sure it wasn't a misread: two more reads must agree
+                    checks = [read_cost(grab_screen(sct), panel[1]) for _ in range(2)]
+                    if not all(c is not None and abs(c - cost) <= 0.01 * cost for c in checks):
+                        good = [c for c in checks if c is not None and c <= limit]
+                        if good:
+                            cost = good[0]
+                            state["cost"] = format_amount(cost)
+                            state["last_cost"] = cost
+                if cost is not None and cost > limit:
                     if next_droid(f"Next roll on the {side} droid costs {format_amount(cost)} - "
                                   f"over your {cfg['max_cost']} limit."):
                         continue
@@ -1576,6 +1638,29 @@ def _variant_from_line(line, h):
     return next(iter(allowed)) if len(allowed) == 1 else None
 
 
+def _rainbow_word(line):
+    """True if the variant word (left of the rarity pill) is multi-coloured = RAINBOW.
+    Its letters change colour all the time, so OCR often can't read it, but no other
+    variant has 3+ different colours in its text."""
+    hsv = cv2.cvtColor(line, cv2.COLOR_BGR2HSV)
+    # the pill's black text is the only black text on the line - cut there
+    dark = hsv[:, :, 2] < 70
+    cols = np.where(dark.sum(axis=0) >= max(2, int(0.08 * line.shape[0])))[0]
+    cols = cols[cols > 0.15 * line.shape[1]]
+    cut = int(cols.min() - 0.03 * line.shape[1]) if len(cols) else line.shape[1]
+    word = hsv[:, :max(1, cut)].reshape(-1, 3)
+    bg = int(np.median(word[:, 0]))
+    vivid = word[(word[:, 1] > 110) & (word[:, 2] > 120)]
+    d = np.abs(vivid[:, 0].astype(int) - bg)
+    vivid = vivid[np.minimum(d, 180 - d) > 12]          # ignore the background colour
+    if len(vivid) < 40:
+        return False
+    h = vivid[:, 0]
+    families = [((h <= 8) | (h >= 170)), (h >= 15) & (h <= 34), (h >= 36) & (h <= 80),
+                (h >= 90) & (h <= 125), (h >= 126) & (h <= 169)]
+    return sum(1 for f in families if f.mean() >= 0.05) >= 3
+
+
 def _companions_bar(bgr):
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     m = cv2.inRange(hsv, (95, 150, 150), (110, 255, 255))
@@ -1624,6 +1709,8 @@ def _read_droid_screen(bgr):
             rar = rar or next((r for r in RARITY_WORDS if r in s), None)
         if rar and var:
             break
+    if _rainbow_word(line):                      # colour beats OCR for rainbow text
+        var = "RAINBOW"
     nh = cv2.cvtColor(namez, cv2.COLOR_BGR2HSV)
     wm = ((nh[:, :, 1] < 70) & (nh[:, :, 2] > 200)).astype(np.uint8) * 255
     pool = [n for n, r in DROID_RARITY.items() if not rar or r.upper() == rar]
@@ -1795,15 +1882,36 @@ def change_inventory(name, variant, delta):
     return f"{verb} {label}{name} – {player['name']} now has {new}"
 
 
+def inv_show(lines, seconds=6, color=None):
+    """Show text in the small inventory box under the top-left badge."""
+    if isinstance(lines, str):
+        lines = [lines]
+    state["inv_lines"] = lines
+    state["inv_color"] = color
+    state["inv_until"] = time.time() + seconds
+    print("Inventory:", " | ".join(lines))
+
+
+def grab_without_overlays(sct):
+    """Screenshot with our own boxes out of the way (they're also excluded from
+    captures on Windows 10/11, this is the backup for older Windows)."""
+    state["capture_hide"] = True
+    time.sleep(0.3)                               # let the boxes hide (refresh is 100 ms)
+    try:
+        return grab_screen(sct)
+    finally:
+        state["capture_hide"] = False
+
+
 def inventory_hotkey(action):
     """Called from the hotkey listener: read the droid, then confirm on a 2nd press."""
     if state.get("inv_busy"):
         return
     if not accounts_enabled() or not _account["refresh"]:
-        notify("Sign in to use the inventory keys", 4)
+        inv_show("Sign in to use the inventory keys", 4, RED)
         return
     if _account.get("offline"):
-        notify("Offline - inventory changes need internet", 4)
+        inv_show("Offline - inventory changes need internet", 4, RED)
         return
     pend = state.get("inv_pending")
     key_name = cfg["inv_add_key" if action == "add" else "inv_remove_key"].upper()
@@ -1813,39 +1921,42 @@ def inventory_hotkey(action):
         try:
             if pend and pend["action"] == action and time.time() < pend["expires"]:
                 state["inv_pending"] = None
-                notify("Saving…", 3)
-                notify(change_inventory(pend["name"], pend["variant"],
-                                        1 if action == "add" else -1), 6)
+                inv_show("Saving\u2026", 5)
+                msg = change_inventory(pend["name"], pend["variant"], 1 if action == "add" else -1)
+                ok = msg.startswith(("Added", "Removed"))
+                inv_show(("\u2714 " if ok else "") + msg, 6, GREEN if ok else RED)
                 return
-            notify("Reading droid…", 4)
+            inv_show("Reading droid\u2026", 6)
             with mss.mss() as sct:
-                img = grab_screen(sct)
+                img = grab_without_overlays(sct)
             r = read_droid(img)
             if not r:
-                notify("No droid found - open the droid screen or look straight at a "
-                       "blueprint card, then try again", 6)
+                inv_show(["No droid found.", "Open the droid screen or look straight",
+                          "at a blueprint card, then try again."], 6, RED)
                 return
             if not r["variant"]:
-                notify(f"Found {r['name']} but couldn't read its variant - try again", 6)
+                inv_show([f"Droid: {r['name'].upper()}", "Variant: couldn't read - try again"],
+                         6, RED)
                 return
             player = current_player()
             if not player:
-                notify("No players on your website login yet", 5)
+                inv_show("No players on your website login yet", 5, RED)
                 return
-            label = "" if DROID_RARITY.get(r["name"]) == "Iconic" else variant_label(r["variant"]) + " "
+            iconic = DROID_RARITY.get(r["name"]) == "Iconic"
             state["inv_pending"] = {"action": action, "name": r["name"], "variant": r["variant"],
                                     "expires": time.time() + 8}
-            verb = "Add" if action == "add" else "Remove"
-            prep = "to" if action == "add" else "from"
-            notify(f"{verb} {label}{r['name']} {prep} {player['name']}? "
-                   f"Press {key_name} again to confirm", 8)
+            question = (f"Add to {player['name']}? Press {key_name} again" if action == "add"
+                        else f"Remove from {player['name']}? Press {key_name} again")
+            inv_show([f"Droid: {r['name'].upper()}",
+                      f"Variant: {'ICONIC' if iconic else r['variant']}",
+                      question], 8)
         except AuthError as e:
-            notify(f"Website said no: {e}", 6)
+            inv_show(f"Website said no: {e}", 6, RED)
         except OSError:
-            notify("Couldn't reach the website - check your internet", 6)
+            inv_show("Couldn't reach the website - check your internet", 6, RED)
         except Exception as e:
             print("Inventory error:", e)
-            notify(f"Inventory error: {e}", 6)
+            inv_show(f"Inventory error: {e}", 6, RED)
         finally:
             state["inv_busy"] = False
 
@@ -1912,7 +2023,8 @@ def hwnd_of(win):
 
 
 def make_click_through(win):
-    """Let mouse clicks pass through the overlay to the game (Windows only)."""
+    """Let mouse clicks pass through the overlay to the game, and keep the overlay out
+    of screenshots so it never covers what the app reads (Windows only)."""
     if sys.platform != "win32":
         return
     try:
@@ -1920,6 +2032,10 @@ def make_click_through(win):
         style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
         style |= 0x80000 | 0x20 | 0x80 | 0x08000000  # layered, transparent, toolwindow, noactivate
         ctypes.windll.user32.SetWindowLongW(hwnd, -20, style)
+    except Exception:
+        pass
+    try:
+        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_of(win), 0x11)  # exclude from capture
     except Exception:
         pass
 
@@ -2027,6 +2143,21 @@ def run_windows():
     make_click_through(root)
     shown = ["full"]
 
+    invwin = tk.Toplevel(root)
+    invwin.overrideredirect(True)
+    invwin.attributes("-topmost", True)
+    invwin.attributes("-alpha", 0.92)
+    invwin.configure(bg=BG)
+    invbox = tk.Frame(invwin, bg=BG, padx=10, pady=6,
+                      highlightthickness=1, highlightbackground="#2b3038")
+    invbox.pack()
+    invtext = tk.Label(invbox, bg=BG, fg=FG, font=("Segoe UI", 10, "bold"),
+                       justify="left", anchor="w")
+    invtext.pack(fill="x")
+    invwin.withdraw()
+    make_click_through(invwin)
+    inv_shown = [False]
+
     def refresh():
         if state["quit"]:
             root.destroy()
@@ -2121,10 +2252,25 @@ def run_windows():
                               "\u00b7 Home set area \u00b7 End quit")
         message.config(text=state["error"] or state["message"],
                        fg=RED if state["error"] else DIM)
+        # small inventory box (F9/F10)
+        want_inv = (bool(state["inv_lines"]) and time.time() < state["inv_until"]
+                    and not state["capture_hide"])
+        if want_inv:
+            invtext.config(text="\n".join(state["inv_lines"]), fg=state["inv_color"] or FG)
+            if not inv_shown[0]:
+                invwin.geometry(f"+{cfg['mini_x']}+{cfg['mini_y'] + 34}")
+                invwin.deiconify()
+                make_click_through(invwin)
+            invwin.attributes("-topmost", True)
+        elif inv_shown[0]:
+            invwin.withdraw()
+        inv_shown[0] = want_inv
         full = cfg["overlay"] and (
             not cfg["hide_when_paused"] or state["enabled"] or state["error"]
             or state["menu_open"] or time.time() < state["show_until"])
         view = "full" if full else ("mini" if cfg["mini_badge"] else "none")
+        if state["capture_hide"]:
+            view = "none"
         if view != shown[0]:
             frame.pack_forget()
             mini.pack_forget()
