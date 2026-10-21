@@ -64,7 +64,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -1208,8 +1208,15 @@ def main():
         except Exception:
             pass
     if state.get("restart_path"):
+        # Start the new version with a clean environment, so it unpacks its own
+        # files (incl. Tesseract) instead of reusing this copy's temp folder,
+        # which is deleted as soon as this copy closes.
+        for k in list(os.environ):
+            if k.startswith("_PYI") or k in ("_MEIPASS2", "TESSDATA_PREFIX"):
+                del os.environ[k]
+        os.environ["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         try:
-            subprocess.Popen([state["restart_path"]], cwd=BASE_DIR)
+            subprocess.Popen([state["restart_path"]], cwd=BASE_DIR, env=dict(os.environ))
         except OSError:
             os.startfile(state["restart_path"])   # lets Windows ask for admin if needed
     print("Bye.")
