@@ -1,6 +1,7 @@
 """
 SW Key Helper - two helpers for the Droid Tycoon map:
   Fishing  finds the yellow key tiles, reads them and presses them.
+  Clicker  keeps left-clicking (AFK credit farming) while Fortnite is in front.
   Traits   keeps rerolling the trait on your first (left) droid until it gets
            Overclocked or Chip Finder. Stand at the trait scanner first.
 
@@ -9,8 +10,8 @@ Hotkeys (work while the game is focused):
   Up / Down   pick Fishing or Traits while the menu is open
               (Traits then shows the trait list: Up/Down move, Left/Right sets
               Off / Any / Rainbow-only, Insert starts rolling)
-  Page Up     faster  (less delay between presses)
-  Page Down   slower  (more delay between presses)
+  Page Up     faster  (fishing: less delay between presses / clicker: more clicks)
+  Page Down   slower
   Home        draw a custom scan area (optional - the default is automatic)
   Delete      save debug pictures (debug_raw.png, debug_detect.png, debug_letters.png)
   End         quit
@@ -64,9 +65,16 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.0.3"
+VERSION = "1.2.0"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
+
+# LMS Droid Tycoon (Firebase) - same project as the website. Copy these two values
+# from the website's firebase-config.js. While they say PASTE..., no login is needed.
+FIREBASE_API_KEY = "AIzaSyBo1Fn_s1kgbULMYt5CuJOE-GkQxeTfLZQ"
+FIREBASE_PROJECT = "droid-tycoon-79e66"
+LOGIN_DOMAIN = "droid-tracker.app"   # logins are username@droid-tracker.app
+OFFLINE_GRACE_DAYS = 7               # keep working this long without internet
 
 CONFIG_FILE = "config.json"
 DEFAULTS = {
@@ -94,6 +102,10 @@ DEFAULTS = {
     "stop_if_unreadable": True,  # stop if a trait that might be wanted can't be read
     "roll_wait": 7.0,           # seconds the roll animation takes before pressing F again
     "max_rolls": 0,             # stop after this many rolls (0 = no limit)
+    "max_cost": "500T",         # stop when the next roll costs more than this ("off" = no limit)
+    # --- Auto clicker ---
+    "clicker_cps": 10,          # clicks per second (Page Up/Down change it)
+    "clicker_window": "Fortnite",  # only click while this window is in front ("" = anywhere)
     "interact_key": "f",
     # --- Overlay ---
     "overlay": True,            # show the on-screen info box
@@ -173,8 +185,15 @@ state = {
     "mode": "fishing", "menu_open": False, "menu_choice": 0, "menu_time": 0.0,
     "trait": "", "rolls": 0, "status": "",
     "menu_stage": "mode", "pick_index": 0,
+    "clicks": 0, "spent": 0.0, "cost": "", "pending_roll": None, "roll_times": [],
 }
-MODES = ["fishing", "traits"]
+MODES = ["fishing", "traits", "clicker"]
+MODE_NAMES = ["Fishing", "Traits (reroll left droid)", "Auto Clicker"]
+COST_STEPS = ["off", "1B", "10B", "100B", "1T", "10T", "100T", "500T", "1Qa", "10Qa", "100Qa"]
+SUFFIX = {"": 1, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12, "QA": 1e15, "QI": 1e18,
+          "SX": 1e21, "SP": 1e24}
+STATS_FILE = "trait_stats.json"
+TIERS = ["default", "gold", "diamond", "rainbow"]
 
 # How each trait is recognised (words from its name or description)
 TRAIT_WORDS = {
@@ -213,7 +232,11 @@ def notify(msg, seconds=2.5):
 def start_mode():
     state["menu_open"] = False
     state["rolls"], state["trait"], state["status"] = 0, "", ""
+    state["clicks"], state["spent"], state["cost"] = 0, 0.0, ""
+    state["pending_roll"], state["roll_times"] = None, []
     state["enabled"] = True
+    if state["mode"] == "traits":
+        fetch_shared()
     notify(f"{state['mode'].title()} started")
 
 
@@ -246,13 +269,22 @@ def on_key(key):
         if state["menu_stage"] == "mode":
             state["menu_choice"] = (state["menu_choice"] + step) % len(MODES)
         else:
-            state["pick_index"] = (state["pick_index"] + step) % len(TRAIT_NAMES)
+            state["pick_index"] = (state["pick_index"] + step) % (len(TRAIT_NAMES) + 1)
     elif key in (K.left, K.right) and state["menu_open"] and state["menu_stage"] == "traits":
         state["menu_time"] = time.time()
-        name = TRAIT_NAMES[state["pick_index"]]
-        cur = cfg["trait_wanted"].get(name, "off")
         step = 1 if key == K.right else -1
-        cfg["trait_wanted"][name] = CHOICES[(CHOICES.index(cur) + step) % len(CHOICES)]
+        if state["pick_index"] == len(TRAIT_NAMES):          # last row: cost limit
+            cur = cfg["max_cost"] if cfg["max_cost"] in COST_STEPS else "500T"
+            cfg["max_cost"] = COST_STEPS[(COST_STEPS.index(cur) + step) % len(COST_STEPS)]
+        else:
+            name = TRAIT_NAMES[state["pick_index"]]
+            cur = cfg["trait_wanted"].get(name, "off")
+            cfg["trait_wanted"][name] = CHOICES[(CHOICES.index(cur) + step) % len(CHOICES)]
+    elif key in (K.page_up, K.page_down) and state["mode"] == "clicker":
+        step = 1 if key == K.page_up else -1
+        cfg["clicker_cps"] = int(min(50, max(1, cfg["clicker_cps"] + step)))
+        save_config()
+        notify(f"Auto clicker: {cfg['clicker_cps']} clicks per second")
     elif key in (K.page_up, K.page_down):
         step = -DELAY_STEP if key == K.page_up else DELAY_STEP
         cfg["press_delay"] = round(min(DELAY_MAX, max(DELAY_MIN, cfg["press_delay"] + step)), 3)
@@ -507,6 +539,9 @@ def scanner():
             if state["enabled"] and state["mode"] == "traits":
                 run_traits(sct)
                 continue
+            if state["enabled"] and state["mode"] == "clicker":
+                run_clicker()
+                continue
             try:
                 t0 = time.perf_counter()
                 img = np.array(sct.grab(get_search_area()))[:, :, :3]
@@ -726,6 +761,429 @@ def stop_traits(msg):
     notify(msg, 30)
 
 
+def trait_tier(bgr):
+    """'default' (teal), 'gold', 'diamond' or 'rainbow' from the panel's trait icon."""
+    H, W = bgr.shape[:2]
+    icon = bgr[int(0.65 * H):int(0.84 * H), int(0.29 * W):int(0.42 * W)]
+    if rainbow_trait(bgr):
+        return "rainbow"
+    hsv = cv2.cvtColor(icon, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    vivid = (hsv[:, 1] > 110) & (hsv[:, 2] > 120)
+    whiteish = ((hsv[:, 1] < 70) & (hsv[:, 2] > 190)).mean()
+    if vivid.mean() < 0.03 and whiteish < 0.03:
+        return ""                                  # no icon (e.g. "Discover trait")
+    hue = float(np.median(hsv[vivid, 0])) if vivid.any() else -1
+    if 10 <= hue <= 40:
+        return "gold"
+    if 78 <= hue <= 92:
+        return "default"
+    return "diamond"                               # light blue / white (best guess)
+
+
+def parse_amount(text):
+    """'67.20B' -> 67.2e9. Handles the game font's B being read as 8."""
+    t = text.upper().replace(" ", "").replace(",", ".")
+    t = re.sub(r"[O0]A$", "QA", t).replace("0I", "QI")
+    m = re.match(r"^(\d+)\.(\d\d)([A-Z]*)(\d?)$", t)
+    if not m:
+        m2 = re.match(r"^(\d+)(\d\d)([A-Z]+)$", t)     # decimal point missed
+        if not m2:
+            return None
+        m = m2
+    whole, dec, suf, extra = m.group(1), m.group(2), m.group(3), (m.group(4) if m.re.groups > 3 else "")
+    if not suf and extra == "8":
+        suf = "B"
+    elif extra:
+        return None
+    if suf not in SUFFIX:
+        return None
+    return float(f"{whole}.{dec}") * SUFFIX[suf]
+
+
+def format_amount(value):
+    for suf, mult in sorted(SUFFIX.items(), key=lambda kv: -kv[1]):
+        if value >= mult and mult > 1:
+            return f"{value / mult:.2f}{suf.title() if len(suf) > 1 else suf}"
+    return f"{value:.0f}"
+
+
+def read_cost(bgr, button):
+    """Read the credit amount on the roll button."""
+    x, y, w, h = button["x"], button["y"], button["w"], button["h"]
+    crop = bgr[y:y + h, x + int(h * 2.4):x + w]     # skip the coin on the left
+    g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    g = cv2.resize(g, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+    _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if bw.mean() < 127:
+        bw = 255 - bw
+    bw = cv2.copyMakeBorder(bw, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
+    text = pytesseract.image_to_string(
+        bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.KMBTQaiSxp").strip()
+    return parse_amount(text)
+
+
+
+# ----------------------------------------------------------------- account ---
+# Invite-only: people sign in with the LMS Droid Tycoon login you made for them.
+
+AUTH_FILE = "account.json"
+_account = {"uid": None, "username": "", "id_token": None, "expires": 0.0,
+            "refresh": None, "offline": False}
+
+
+class AuthError(Exception):
+    """Firebase said no (wrong password, account turned off, removed...)."""
+
+
+def accounts_enabled():
+    return not (FIREBASE_API_KEY.startswith("PASTE") or FIREBASE_PROJECT.startswith("PASTE"))
+
+
+def _http(url, data=None, form=False, token=None, method=None):
+    import urllib.request, urllib.parse, urllib.error
+    headers = {"User-Agent": "SW-Key-Helper"}
+    body = None
+    if data is not None:
+        if form:
+            body = urllib.parse.urlencode(data).encode()
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        else:
+            body = json.dumps(data).encode()
+            headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.load(e).get("error", {}).get("message", "") or str(e)
+        except Exception:
+            msg = str(e)
+        raise AuthError(msg)
+
+
+def friendly_auth_error(msg):
+    m = str(msg).upper()
+    if "DISABLED" in m:
+        return "This account has been turned off. Ask the admin."
+    if "TOO_MANY" in m:
+        return "Too many tries. Wait a minute and try again."
+    if any(k in m for k in ("INVALID", "NOT_FOUND", "PASSWORD", "MISSING")):
+        return "That username and password don't match."
+    return f"Couldn't sign in ({msg})."
+
+
+def save_account():
+    try:
+        with open(AUTH_FILE, "w") as f:
+            json.dump({"username": _account["username"], "uid": _account["uid"],
+                       "refresh": _account["refresh"], "last_ok": time.time()}, f)
+    except Exception as e:
+        print("Couldn't save login:", e)
+
+
+def sign_in(username, password):
+    username = username.strip()
+    email = username if "@" in username else f"{username.lower()}@{LOGIN_DOMAIN}"
+    r = _http("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+              f"?key={FIREBASE_API_KEY}",
+              {"email": email, "password": password, "returnSecureToken": True})
+    _account.update(uid=r["localId"], username=username.split("@")[0],
+                    id_token=r["idToken"], refresh=r["refreshToken"],
+                    expires=time.time() + int(r.get("expiresIn", 3600)) - 120,
+                    offline=False)
+    save_account()
+
+
+def refresh_login():
+    r = _http(f"https://securetoken.googleapis.com/v1/token?key={FIREBASE_API_KEY}",
+              {"grant_type": "refresh_token", "refresh_token": _account["refresh"]}, form=True)
+    _account.update(uid=r["user_id"], id_token=r["id_token"], refresh=r["refresh_token"],
+                    expires=time.time() + int(r.get("expires_in", 3600)) - 120,
+                    offline=False)
+    save_account()
+
+
+def id_token():
+    """A fresh Firebase token for database calls (refreshed when it runs out)."""
+    if not _account["id_token"] or time.time() > _account["expires"]:
+        refresh_login()
+    return _account["id_token"]
+
+
+def check_saved_login():
+    """'ok', 'offline' (no internet but logged in recently) or 'login' (ask)."""
+    try:
+        with open(AUTH_FILE) as f:
+            saved = json.load(f)
+    except Exception:
+        return "login"
+    _account.update(username=saved.get("username", ""), uid=saved.get("uid"),
+                    refresh=saved.get("refresh"))
+    if not _account["refresh"]:
+        return "login"
+    try:
+        refresh_login()
+        return "ok"
+    except AuthError as e:                       # turned off / removed / password changed
+        print("Saved login no longer works:", e)
+        sign_out(quiet=True)
+        return "login"
+    except OSError:                              # no internet
+        if time.time() - saved.get("last_ok", 0) < OFFLINE_GRACE_DAYS * 86400:
+            _account["offline"] = True
+            return "offline"
+        return "login"
+
+
+def sign_out(quiet=False):
+    try:
+        os.remove(AUTH_FILE)
+    except OSError:
+        pass
+    _account.update(uid=None, id_token=None, refresh=None)
+    if not quiet:
+        notify("Signed out - SW Key Helper will close", 5)
+
+
+def login_window(message=""):
+    """Small sign-in window. Returns True once signed in, False if closed."""
+    win = tk.Tk()
+    win.title("SW Key Helper - Sign in")
+    win.configure(bg=BG)
+    win.resizable(False, False)
+    win.attributes("-topmost", True)
+    for folder in (getattr(sys, "_MEIPASS", BASE_DIR), BASE_DIR):
+        ico = os.path.join(folder, "SW Key Helper.ico")
+        if os.path.exists(ico):
+            try:
+                win.iconbitmap(ico)
+            except Exception:
+                pass
+            break
+    box = tk.Frame(win, bg=BG, padx=28, pady=22)
+    box.pack()
+    tk.Label(box, text="SW KEY HELPER", bg=BG, fg=FG,
+             font=("Segoe UI", 15, "bold")).pack(anchor="w")
+    tk.Label(box, text="Sign in with your LMS Droid Tycoon login", bg=BG, fg=DIM,
+             font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 14))
+
+    def field(label, show=""):
+        tk.Label(box, text=label, bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
+        e = tk.Entry(box, width=32, font=("Segoe UI", 11), bg="#232833", fg=FG,
+                     insertbackground=FG, relief="flat", show=show)
+        e.pack(fill="x", pady=(2, 10), ipady=5)
+        return e
+
+    user = field("Username")
+    pw = field("Password", show="•")
+    user.insert(0, _account.get("username") or "")
+    status = tk.Label(box, text=message, bg=BG, fg=RED if message else DIM,
+                      font=("Segoe UI", 9), wraplength=300, justify="left")
+    status.pack(anchor="w", pady=(0, 8))
+    result = {"ok": False}
+
+    def submit(_=None):
+        if not user.get().strip() or not pw.get():
+            status.config(text="Enter your username and password.", fg=RED)
+            return
+        status.config(text="Signing in…", fg=DIM)
+        btn.config(state="disabled")
+        win.update()
+        try:
+            sign_in(user.get(), pw.get())
+            result["ok"] = True
+            win.destroy()
+            return
+        except AuthError as e:
+            status.config(text=friendly_auth_error(e), fg=RED)
+        except OSError:
+            status.config(text="Couldn't reach the server. Check your internet.", fg=RED)
+        btn.config(state="normal")
+
+    btn = tk.Button(box, text="Sign in", command=submit, bg=GREEN, fg="#0b0d10",
+                    activebackground=GREEN, relief="flat", font=("Segoe UI", 11, "bold"),
+                    cursor="hand2")
+    btn.pack(fill="x", ipady=4)
+    tk.Label(box, text="No login? Ask the admin to make you one.", bg=BG, fg=DIM,
+             font=("Segoe UI", 9)).pack(anchor="w", pady=(12, 0))
+    win.bind("<Return>", submit)
+
+    def watch():                                  # close if an update restarts the app
+        if state["quit"]:
+            win.destroy()
+        else:
+            win.after(300, watch)
+
+    watch()
+    win.update_idletasks()
+    w, h = win.winfo_width(), win.winfo_height()
+    win.geometry(f"+{(win.winfo_screenwidth() - w) // 2}+{(win.winfo_screenheight() - h) // 3}")
+    (pw if user.get() else user).focus_force()
+    win.mainloop()
+    return result["ok"]
+
+
+def require_login():
+    """Make sure someone is signed in before the app starts. False = quit."""
+    if not accounts_enabled():
+        return True
+    status = check_saved_login()
+    if status == "ok":
+        return True
+    if status == "offline":
+        notify(f"Offline - using your saved login ({_account['username']})", 6)
+        return True
+    msg = "" if not os.path.exists(AUTH_FILE) else "Please sign in again."
+    return login_window(msg)
+
+
+# ------------------------------------------------------- shared trait odds ---
+# Every roll adds +1 to a shared counter in Firebase (just trait + tier, nothing
+# personal), so everyone's odds are based on all players' rolls.
+
+_shared = {"counts": {}, "total": 0, "fetched": 0.0}
+_KEY_TO_ROLL = {}
+
+
+def roll_key(trait, tier):
+    key = re.sub(r"[^A-Za-z0-9]+", "_", f"{tier or 'none'}__{trait or 'unknown'}").strip("_")
+    _KEY_TO_ROLL[key] = (trait, tier)
+    return key
+
+
+for _t in TIERS + [""]:
+    for _n in TRAIT_NAMES + ["?"]:
+        roll_key(_n, _t)
+
+
+def _firestore_base():
+    return (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
+            f"/databases/(default)/documents")
+
+
+def share_roll(trait, tier):
+    if not accounts_enabled() or not _account["refresh"]:
+        return
+
+    def send():
+        try:
+            base = f"projects/{FIREBASE_PROJECT}/databases/(default)/documents/traitStats"
+            inc = [{"fieldPath": "n", "increment": {"integerValue": "1"}}]
+            _http(_firestore_base() + ":commit", {"writes": [
+                {"transform": {"document": f"{base}/{roll_key(trait, tier)}",
+                               "fieldTransforms": inc}},
+                {"transform": {"document": f"{base}/_total", "fieldTransforms": inc}},
+            ]}, token=id_token())
+        except Exception as e:
+            print("Couldn't share roll:", e)
+
+    threading.Thread(target=send, daemon=True).start()
+
+
+def fetch_shared():
+    if not accounts_enabled() or not _account["refresh"]:
+        return
+
+    def get():
+        try:
+            counts, page = {}, ""
+            while True:
+                url = _firestore_base() + "/traitStats?pageSize=300" + (
+                    f"&pageToken={page}" if page else "")
+                r = _http(url, token=id_token())
+                for d in r.get("documents", []):
+                    key = d["name"].rsplit("/", 1)[-1]
+                    counts[key] = int(d.get("fields", {}).get("n", {}).get("integerValue", 0))
+                page = r.get("nextPageToken", "")
+                if not page:
+                    break
+            _shared.update(counts=counts, total=counts.pop("_total", 0), fetched=time.time())
+        except Exception as e:
+            print("Couldn't load shared odds:", e)
+
+    threading.Thread(target=get, daemon=True).start()
+
+
+def load_stats():
+    try:
+        with open(STATS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"rolls": []}
+
+
+_stats = None
+
+
+def record_roll(trait, tier, cost):
+    global _stats
+    if _stats is None:
+        _stats = load_stats()
+    _stats["rolls"].append({"trait": trait, "tier": tier, "cost": cost,
+                            "t": round(time.time(), 1)})
+    _stats["rolls"] = _stats["rolls"][-5000:]
+    share_roll(trait, tier)
+    if state["rolls"] % 25 == 0:
+        fetch_shared()
+    try:
+        with open(STATS_FILE, "w") as f:
+            json.dump(_stats, f)
+    except Exception as e:
+        print("Couldn't save trait stats:", e)
+
+
+def stats_summary():
+    """Two overlay lines: tier percentages, and the chance of a wanted trait."""
+    global _stats
+    if _stats is None:
+        _stats = load_stats()
+    rolls = [r for r in _stats["rolls"] if r.get("tier")]
+    # tally (trait, tier) -> count, for this PC and for everyone (shared)
+    mine = {}
+    for r in rolls:
+        mine[(r["trait"], r["tier"])] = mine.get((r["trait"], r["tier"]), 0) + 1
+    everyone = {}
+    for key, c in _shared["counts"].items():
+        if key in _KEY_TO_ROLL and _KEY_TO_ROLL[key][1]:
+            everyone[_KEY_TO_ROLL[key]] = c
+
+    def tier_line(label, tally):
+        n = sum(tally.values())
+        pct = {t: 100 * sum(c for (_, tt), c in tally.items() if tt == t) / n for t in TIERS}
+        return (f"{label}Default {pct['default']:.0f}% \u00b7 Gold {pct['gold']:.0f}% \u00b7 "
+                f"Diamond {pct['diamond']:.0f}% \u00b7 Rainbow {pct['rainbow']:.1f}%  "
+                f"({n:,} rolls)")
+
+    if not mine and not everyone:
+        return "Odds: collecting data (no rolls recorded yet)"
+    lines = []
+    if mine:
+        lines.append(tier_line("You: " if everyone else "", mine))
+    if everyone:
+        lines.append(tier_line("Everyone: ", everyone))
+    # use whichever has more data for the "wanted" estimate
+    tally = everyone if sum(everyone.values()) >= sum(mine.values()) else mine
+    n = sum(tally.values())
+    hits = sum(c for (trait, tier), c in tally.items() if is_wanted(trait, tier == "rainbow"))
+    times = state["roll_times"]
+    gaps = sorted(b - a for a, b in zip(times, times[1:]) if 0 < b - a < 60)
+    per_roll = gaps[len(gaps) // 2] if gaps else None
+    if n < 20:
+        line2 = f"Wanted odds: need 20+ rolls of data ({n} so far)"
+    elif hits == 0:
+        line2 = f"Wanted odds: under 1 in {n} so far"
+    else:
+        p = hits / n
+        exp = 1 / p
+        line2 = f"Wanted: {100 * p:.1f}% per roll \u2248 1 in {exp:.0f}"
+        if per_roll:
+            line2 += f" \u00b7 ~{exp * per_roll / 60:.0f} min on average"
+    return "\n".join(lines + [line2])
+
+
 def run_traits(sct):
     try:
         while traits_active():
@@ -766,17 +1224,23 @@ def run_traits(sct):
             state["status"] = "Reading trait"
             if not traits_wait(0.5):              # let the panel finish sliding in
                 return
-            texts, rainbow, name = [], False, ""
+            texts, tier_name, name = [], "", ""
             for _ in range(5):                    # a few tries if the text is hard to read
                 img = grab_screen(sct)
                 box = (0.2, 0.56, 0.5, 0.70)
                 texts += [white_text(img, box), white_text(img, box, any_bright=True)]
-                rainbow = rainbow or rainbow_trait(img)
+                t = trait_tier(img)
+                if t == "rainbow" or not tier_name:
+                    tier_name = t
                 name = identify_trait(texts)
                 if name or not traits_active():
                     break
                 time.sleep(0.3)
-            tier = " (rainbow)" if rainbow else ""
+            rainbow = tier_name == "rainbow"
+            if state["pending_roll"] is not None:   # this is the result of our last roll
+                record_roll(name or "?", tier_name, state["pending_roll"])
+                state["pending_roll"] = None
+            tier = f" ({tier_name})" if tier_name and tier_name != "default" else ""
             state["trait"] = (name + tier) if name else (
                 (max(texts, key=len)[:30] + tier) if any(texts) else "(none yet)")
             if name and is_wanted(name, rainbow):
@@ -796,7 +1260,25 @@ def run_traits(sct):
             if not panel:
                 stop_traits("Lost the trait panel before rolling")
                 return
-            state["status"] = f"Rolling (#{state['rolls'] + 1})"
+            cost = None
+            for _ in range(3):
+                cost = read_cost(grab_screen(sct), panel[1])
+                if cost is not None:
+                    break
+                time.sleep(0.2)
+            state["cost"] = format_amount(cost) if cost is not None else "?"
+            limit = parse_amount(cfg["max_cost"] if "." in cfg["max_cost"] else
+                                 re.sub(r"^(\d+)", r"\1.00", cfg["max_cost"]))
+            if cfg["max_cost"] != "off" and limit:
+                if cost is None:
+                    stop_traits("Couldn't read the roll cost - stopped because the cost "
+                                "limit is on")
+                    return
+                if cost > limit:
+                    stop_traits(f"Next roll costs {format_amount(cost)} - over your "
+                                f"{cfg['max_cost']} limit. Stopped.")
+                    return
+            state["status"] = f"Rolling (#{state['rolls'] + 1}) \u00b7 {state['cost']}"
             click_at(panel[1]["cx"], panel[1]["cy"])
             started = False
             end = time.time() + 3
@@ -812,6 +1294,9 @@ def run_traits(sct):
                 return
             state["rolls"] += 1
             state["inputs"] += 1
+            state["pending_roll"] = cost
+            state["spent"] += cost or 0
+            state["roll_times"] = (state["roll_times"] + [time.time()])[-50:]
 
             # 5. Wait for the roll animation, then go again
             state["status"] = f"Waiting for roll #{state['rolls']}"
@@ -821,6 +1306,44 @@ def run_traits(sct):
         stop_traits("Tesseract not found - check tesseract_path in config.json")
     except Exception as e:
         stop_traits(f"Traits error: {e}")
+
+
+# ------------------------------------------------------------ auto clicker ---
+
+def foreground_title():
+    if sys.platform != "win32":
+        return ""
+    try:
+        u = ctypes.windll.user32
+        hwnd = u.GetForegroundWindow()
+        buf = ctypes.create_unicode_buffer(256)
+        u.GetWindowTextW(hwnd, buf, 256)
+        return buf.value
+    except Exception:
+        return ""
+
+
+def run_clicker():
+    """Left-click continuously at the current mouse position while it's on."""
+    next_click = time.perf_counter()
+    while state["enabled"] and state["mode"] == "clicker" and not state["quit"]:
+        want = cfg["clicker_window"].strip().lower()
+        if want and want not in foreground_title().lower():
+            state["status"] = f"Paused - {cfg['clicker_window']} isn't in front"
+            time.sleep(0.25)
+            next_click = time.perf_counter()
+            continue
+        state["status"] = "Clicking"
+        pydirectinput.mouseDown()
+        time.sleep(0.01)
+        pydirectinput.mouseUp()
+        state["clicks"] += 1
+        next_click += 1.0 / max(1, cfg["clicker_cps"])
+        delay = next_click - time.perf_counter()
+        if delay > 0:
+            time.sleep(delay)
+        else:
+            next_click = time.perf_counter()
 
 
 # ---------------------------------------------------------------- windows ---
@@ -974,17 +1497,22 @@ def run_windows():
             for i, n in enumerate(TRAIT_NAMES):
                 mark = "\u25b6" if i == state["pick_index"] else " "
                 lines.append(f"{mark} {n:<21}[{badge[cfg['trait_wanted'].get(n, 'off')]:^7}]")
+            mark = "\u25b6" if state["pick_index"] == len(TRAIT_NAMES) else " "
+            limit = cfg["max_cost"] if cfg["max_cost"] != "off" else "no limit"
+            lines.append("")
+            lines.append(f"{mark} {'Stop if cost over':<21}[{limit:^7}]")
             picker.config(text="\n".join(lines))
             reading.config(text="")
             pressed.config(text="")
             stats.config(text="")
-            hints.config(text="Up/Down move \u00b7 Left/Right Off/Any/Rainbow \u00b7 Insert start")
+            hints.config(text="Up/Down move \u00b7 Left/Right change \u00b7 Insert start")
         elif state["menu_open"]:
             title.config(text="SW KEY HELPER \u2013 CHOOSE MODE", fg=FG)
-            names = ["Fishing", "Traits (reroll left droid)"]
-            reading.config(text=("\u25b6 " if state["menu_choice"] == 0 else "    ") + names[0])
-            pressed.config(text=("\u25b6 " if state["menu_choice"] == 1 else "    ") + names[1])
-            stats.config(text="")
+            rows = [("\u25b6 " if state["menu_choice"] == i else "    ") + n
+                    for i, n in enumerate(MODE_NAMES)]
+            reading.config(text=rows[0])
+            pressed.config(text=rows[1])
+            stats.config(text=rows[2], fg=FG, font=("Segoe UI", 11))
             hints.config(text="Up/Down choose \u00b7 Insert start")
         else:
             if state["error"]:
@@ -993,10 +1521,22 @@ def run_windows():
                 title.config(text=f"{mode} \u2013 ACTIVE", fg=GREEN)
             else:
                 title.config(text="SW KEY HELPER \u2013 STOPPED", fg=AMBER)
+            stats.config(fg=DIM, font=("Segoe UI", 10))
             if state["mode"] == "traits":
                 reading.config(text=f"Trait: {state['trait'] or DASH}")
-                pressed.config(text=f"Rolls: {state['rolls']} \u00b7 {state['status'] or DASH}")
-                stats.config(text="Stops on: " + wanted_summary(), wraplength=420)
+                spent = f" \u00b7 spent {format_amount(state['spent'])}" if state["spent"] else ""
+                pressed.config(text=f"Rolls: {state['rolls']}{spent} \u00b7 "
+                                    f"{state['status'] or DASH}")
+                limit = cfg["max_cost"] if cfg["max_cost"] != "off" else "no limit"
+                stats.config(text=f"Stops on: {wanted_summary()} \u00b7 cost limit {limit}\n"
+                                  + stats_summary(), wraplength=440)
+            elif state["mode"] == "clicker":
+                reading.config(text=f"Clicks: {state['clicks']:,}")
+                pressed.config(text=f"Speed: {cfg['clicker_cps']}/s \u00b7 "
+                                    f"{state['status'] or DASH}")
+                where = (f"only while {cfg['clicker_window']} is in front"
+                         if cfg["clicker_window"] else "anywhere")
+                stats.config(text=f"Clicks where your mouse is, {where}", wraplength=440)
             else:
                 reading.config(text=f"Reading: {state['reading'] or DASH}")
                 pressed.config(text=f"Pressed: {state['pressed'] or DASH}")
@@ -1152,8 +1692,20 @@ def start_tray():
         state["quit"] = True
         icon.stop()
 
+    def do_sign_out(icon, item):
+        sign_out()
+        state["quit"] = True
+        icon.stop()
+
+    account_items = []
+    if accounts_enabled() and _account["username"]:
+        account_items = [
+            pystray.MenuItem(f"Signed in as {_account['username']}", None, enabled=False),
+            pystray.MenuItem("Sign out", do_sign_out),
+        ]
     menu = pystray.Menu(
         pystray.MenuItem(f"SW Key Helper v{VERSION}", None, enabled=False),
+        *account_items,
         pystray.MenuItem("Check for updates", do_update),
         pystray.MenuItem("Open settings folder", open_folder),
         pystray.Menu.SEPARATOR,
@@ -1186,6 +1738,12 @@ def main():
         threading.Thread(target=cleanup_old_version, daemon=True).start()
         if cfg["auto_update"]:
             threading.Thread(target=check_for_update, daemon=True).start()
+    if not require_login():
+        print("Not signed in - closing.")
+        state["quit"] = True
+        if state.get("restart_path"):            # an update arrived while signing in
+            restart_new_version()
+        return
     if cfg["tray_icon"]:
         threading.Thread(target=start_tray, daemon=True).start()
     try:
@@ -1207,6 +1765,11 @@ def main():
             state["tray"].stop()
         except Exception:
             pass
+    restart_new_version()
+    print("Bye.")
+
+
+def restart_new_version():
     if state.get("restart_path"):
         # Start the new version with a clean environment, so it unpacks its own
         # files (incl. Tesseract) instead of reusing this copy's temp folder,
@@ -1219,7 +1782,6 @@ def main():
             subprocess.Popen([state["restart_path"]], cwd=BASE_DIR, env=dict(os.environ))
         except OSError:
             os.startfile(state["restart_path"])   # lets Windows ask for admin if needed
-    print("Bye.")
 
 
 if __name__ == "__main__":
