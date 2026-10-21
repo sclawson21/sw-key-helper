@@ -57,9 +57,9 @@ if sys.stdout is None or sys.stderr is None or not sys.stdout.isatty():
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 # Your GitHub "username/repository" where the .exe releases are published.
-UPDATE_REPO = sclawson21/sw-key-helper
+UPDATE_REPO = "sclawson21/sw-key-helper"
 
 CONFIG_FILE = "config.json"
 DEFAULTS = {
