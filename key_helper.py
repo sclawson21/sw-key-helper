@@ -50,14 +50,21 @@ os.chdir(BASE_DIR)
 # With no console window (double-click / .exe), keep messages in a log file
 if sys.stdout is None or sys.stderr is None or not sys.stdout.isatty():
     try:
-        _log = open(os.path.join(BASE_DIR, "key_helper.log"), "w", buffering=1)
+        _log = open(os.path.join(BASE_DIR, "key_helper.log"), "w", buffering=1,
+                    encoding="utf-8", errors="replace")
         sys.stdout = sys.stderr = _log
+    except Exception:
+        pass
+else:
+    try:  # a console that can't show symbols like the arrow shouldn't crash anything
+        sys.stdout.reconfigure(errors="replace")
+        sys.stderr.reconfigure(errors="replace")
     except Exception:
         pass
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
