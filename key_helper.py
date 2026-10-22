@@ -28,6 +28,7 @@ config.json to keep it showing).
 """
 
 import ctypes
+import ctypes.wintypes
 import difflib
 import json
 import os
@@ -68,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.3.1"
+VERSION = "1.3.4"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -119,6 +120,7 @@ DEFAULTS = {
     "inv_add_key": "f9",
     "inv_remove_key": "f10",
     # --- Overlay ---
+    "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
     "overlay": True,            # show the on-screen info box
     "hide_when_paused": True,   # hide the box while paused (it pops up briefly on changes)
     "overlay_x": 20,
@@ -187,7 +189,51 @@ find_tesseract()
 pydirectinput.PAUSE = 0  # we handle our own timing
 
 with mss.mss() as _s:
-    PRIMARY = dict(_s.monitors[1])  # main screen
+    MONITORS = [dict(m) for m in _s.monitors[1:]]   # every screen; [0] is the main one
+PRIMARY = MONITORS[0]
+_screen_cache = {"time": 0.0, "mon": PRIMARY}
+
+
+def fortnite_monitor():
+    """The screen the Fortnite window is on (None if Fortnite isn't open)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        u = ctypes.windll.user32
+        found = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def each(hwnd, _):
+            if u.IsWindowVisible(hwnd):
+                buf = ctypes.create_unicode_buffer(256)
+                u.GetWindowTextW(hwnd, buf, 256)
+                if "fortnite" in buf.value.lower():
+                    found.append(hwnd)
+            return True
+
+        u.EnumWindows(each, 0)
+        for hwnd in found:
+            r = ctypes.wintypes.RECT()
+            u.GetWindowRect(hwnd, ctypes.byref(r))
+            cx, cy = (r.left + r.right) // 2, (r.top + r.bottom) // 2
+            for m in MONITORS:
+                if m["left"] <= cx < m["left"] + m["width"] and m["top"] <= cy < m["top"] + m["height"]:
+                    return m
+    except Exception as e:
+        print("Couldn't find the Fortnite window:", e)
+    return None
+
+
+def screen():
+    """The screen the app watches: the one picked in the tray, or (Auto) the one
+    Fortnite is on, falling back to the main screen."""
+    pick = str(cfg.get("monitor", "auto"))
+    if pick.isdigit() and 1 <= int(pick) <= len(MONITORS):
+        return MONITORS[int(pick) - 1]
+    if time.time() - _screen_cache["time"] > 2:
+        _screen_cache.update(time=time.time(), mon=fortnite_monitor() or PRIMARY)
+    return _screen_cache["mon"]
+
 
 state = {
     "enabled": False, "quit": False, "snapshot": False, "select_area": False,
@@ -300,6 +346,9 @@ def on_key(key):
             state["menu_open"], state["menu_stage"] = True, "mode"
             state["menu_choice"] = MODES.index(state["mode"])
             state["menu_time"] = time.time()
+    elif (key in (K.up, K.down, K.left, K.right) and not state["menu_open"]
+          and adjust_pending(key)):
+        pass
     elif key in (K.up, K.down) and state["menu_open"]:
         state["menu_time"] = time.time()
         step = 1 if key == K.down else -1
@@ -353,7 +402,7 @@ def on_key(key):
 def get_search_area():
     if cfg["search_area"]:
         return cfg["search_area"]
-    m = PRIMARY
+    m = screen()
     return {"left": m["left"] + int(m["width"] * 0.15),
             "top": m["top"] + int(m["height"] * 0.10),
             "width": int(m["width"] * 0.70),
@@ -654,7 +703,7 @@ def traits_active():
 
 
 def grab_screen(sct):
-    return np.array(sct.grab(PRIMARY))[:, :, :3]
+    return np.array(sct.grab(screen()))[:, :, :3]
 
 
 def squash(text):
@@ -841,12 +890,21 @@ def wanted_summary():
 
 
 def click_at(x, y):
-    x, y = int(PRIMARY["left"] + x), int(PRIMARY["top"] + y)
-    pydirectinput.moveTo(x, y)
-    time.sleep(0.06)
-    pydirectinput.moveTo(x + 2, y)       # small wiggle so the game notices the cursor
-    time.sleep(0.06)
-    pydirectinput.moveTo(x, y)
+    m = screen()
+    x, y = int(m["left"] + x), int(m["top"] + y)
+    if m is PRIMARY or sys.platform != "win32":
+        pydirectinput.moveTo(x, y)
+        time.sleep(0.06)
+        pydirectinput.moveTo(x + 2, y)       # small wiggle so the game notices the cursor
+        time.sleep(0.06)
+        pydirectinput.moveTo(x, y)
+    else:                                     # other screens: move the cursor directly
+        u = ctypes.windll.user32
+        u.SetCursorPos(x, y)
+        time.sleep(0.06)
+        u.mouse_event(0x0001, 2, 0, 0, 0)     # small wiggle so the game notices
+        time.sleep(0.06)
+        u.mouse_event(0x0001, -2, 0, 0, 0)
     time.sleep(0.06)
     pydirectinput.mouseDown()
     time.sleep(0.06)
@@ -921,8 +979,9 @@ def parse_amount(text):
     if not m:
         return None
     num, suf = m.group(1), m.group(2)
-    if not suf and "." in num and num[-1] in "68" and len(num.split(".")[1]) == 3:
-        num, suf = num[:-1], "B"                # "33.608" / "67.206" -> ...B
+    if not suf and "." in num and len(num.split(".")[1]) == 3 and num[-1] in "6817":
+        # 2 decimals + a letter the font makes look like a digit: B->8/6, T->7/1
+        num, suf = num[:-1], {"6": "B", "8": "B", "7": "T", "1": "T"}[num[-1]]
     if suf not in SUFFIX:
         return None
     return float(num) * SUFFIX[suf]
@@ -943,6 +1002,16 @@ def fix_cost_decimals(text):
     if m:
         return f"{m.group(1)[:-2]}.{m.group(1)[-2:]}{m.group(2)}"
     return t
+
+
+def _cost_value(text):
+    """A roll cost always has a K/M/B/T/Qa... ending - anything without one is a
+    half-drawn or misread button and must not be trusted."""
+    v = parse_amount(fix_cost_decimals(text))
+    t = re.sub(r"[^0-9A-Za-z.]", "", text)
+    if v is None or not re.search(r"[A-Za-z]$", t) and not re.search(r"\.\d{3}$", t):
+        return None
+    return v
 
 
 def read_cost(bgr, button):
@@ -967,12 +1036,12 @@ def read_cost(bgr, button):
     if bw.mean() < 127:
         bw = 255 - bw
     bw = cv2.copyMakeBorder(bw, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
-    text = fix_cost_decimals(pytesseract.image_to_string(bw, config="--psm 8").strip())
-    value = parse_amount(text)
+    text = pytesseract.image_to_string(bw, config="--psm 8").strip()
+    value = _cost_value(text)
     if value is None:
-        text2 = fix_cost_decimals(pytesseract.image_to_string(
-            bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.KMBTQaiSxp").strip())
-        value = parse_amount(text2)
+        text2 = pytesseract.image_to_string(
+            bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.KMBTQaiSxp").strip()
+        value = _cost_value(text2)
         if value is None:
             print("Couldn't parse roll cost:", repr(text), repr(text2))
     return value
@@ -1638,39 +1707,102 @@ def _variant_from_line(line, h):
     return next(iter(allowed)) if len(allowed) == 1 else None
 
 
-def _rainbow_word(line):
-    """True if the variant word (left of the rarity pill) is multi-coloured = RAINBOW.
-    Its letters change colour all the time, so OCR often can't read it, but no other
-    variant has 3+ different colours in its text."""
-    hsv = cv2.cvtColor(line, cv2.COLOR_BGR2HSV)
-    # the pill's black text is the only black text on the line - cut there
-    dark = hsv[:, :, 2] < 70
-    cols = np.where(dark.sum(axis=0) >= max(2, int(0.08 * line.shape[0])))[0]
-    cols = cols[cols > 0.15 * line.shape[1]]
-    cut = int(cols.min() - 0.03 * line.shape[1]) if len(cols) else line.shape[1]
-    word = hsv[:, :max(1, cut)].reshape(-1, 3)
+def _word_colours(line):
+    """Share of each colour family in the variant word's text (background ignored)."""
+    word = cv2.cvtColor(_variant_word(line), cv2.COLOR_BGR2HSV).reshape(-1, 3)
     bg = int(np.median(word[:, 0]))
     vivid = word[(word[:, 1] > 110) & (word[:, 2] > 120)]
     d = np.abs(vivid[:, 0].astype(int) - bg)
     vivid = vivid[np.minimum(d, 180 - d) > 12]          # ignore the background colour
     if len(vivid) < 40:
-        return False
+        return {}
     h = vivid[:, 0]
-    families = [((h <= 8) | (h >= 170)), (h >= 15) & (h <= 34), (h >= 36) & (h <= 80),
-                (h >= 90) & (h <= 125), (h >= 126) & (h <= 169)]
-    return sum(1 for f in families if f.mean() >= 0.05) >= 3
+    fam = {"red": (h <= 8) | (h >= 170), "yellow": (h >= 15) & (h <= 34),
+           "green": (h >= 36) & (h <= 80), "blue": (h >= 90) & (h <= 125),
+           "purple": (h >= 126) & (h <= 169)}
+    return {k: float(m.mean()) for k, m in fam.items()}
+
+
+def _rainbow_word(line):
+    """RAINBOW's letters cycle through colours, so OCR often fails - but it always has
+    yellow, blue AND purple letters at once, which no other variant has."""
+    c = _word_colours(line)
+    return bool(c) and c["yellow"] >= 0.10 and c["blue"] >= 0.15 and c["purple"] >= 0.08
+
+
+def _green_word(line):
+    """Green variant text only ever means an activated green Kyber."""
+    c = _word_colours(line)
+    return bool(c) and c["green"] >= 0.30 and c["blue"] < 0.10 and c["purple"] < 0.10
+
+
+def _variant_word(line):
+    """The variant word part of a 'VARIANT [PILL]' line: everything left of the pill
+    (the pill's black text is the only black text on the line)."""
+    hsv = cv2.cvtColor(line, cv2.COLOR_BGR2HSV)
+    dark = hsv[:, :, 2] < 70
+    cols = np.where(dark.sum(axis=0) >= max(2, int(0.08 * line.shape[0])))[0]
+    cols = cols[cols > 0.15 * line.shape[1]]
+    cut = int(cols.min() - 0.03 * line.shape[1]) if len(cols) else line.shape[1]
+    return line[:, :max(1, cut)]
+
+
+def _contrast_text(word):
+    """Pixels that stand out from the background, whatever colour both are
+    (e.g. blue KYBER on a blue background)."""
+    lab = cv2.cvtColor(word, cv2.COLOR_BGR2LAB).astype(np.float32)
+    bg = np.median(lab.reshape(-1, 3), axis=0)
+    d = np.sqrt(((lab - bg) ** 2).sum(axis=2))
+    return d > max(30, np.percentile(d, 60))
+
+
+def _kyber_colour(line):
+    """Activated Kyber shows 'KYBER' in its colour: g / b / p, or n (white = not activated)."""
+    word0 = _variant_word(line)
+    on_card = np.median(cv2.cvtColor(word0, cv2.COLOR_BGR2HSV)[:, :, 2]) < 60
+    c = {} if on_card else _word_colours(line)    # droid screen: background-free shares
+    if c:
+        top = max(("green", "blue", "purple"), key=lambda k: c[k])
+        if c[top] >= 0.30:
+            return {"green": "g", "blue": "b", "purple": "p"}[top]
+    word = _variant_word(line)
+    hsv = cv2.cvtColor(word, cv2.COLOR_BGR2HSV)
+    if np.median(hsv[:, :, 2]) < 60:              # blueprint card: text on a black bar
+        mask = hsv[:, :, 2] > 150
+    else:                                         # droid screen: text on a coloured glow
+        mask = _contrast_text(word)
+    px = hsv[mask]
+    if len(px) < 8:
+        return None
+    sat, hue = np.median(px[:, 1]), np.median(px[:, 0])
+    if sat < 60:
+        return "n"
+    if 25 <= hue <= 88:
+        return "g"
+    if 88 < hue <= 125:
+        return "b"
+    if 125 < hue <= 165:
+        return "p"
+    return None
 
 
 def _companions_bar(bgr):
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    m = cv2.inRange(hsv, (95, 150, 150), (110, 255, 255))
+    m = cv2.inRange(hsv, (88, 150, 150), (112, 255, 255))
     m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
     n, _, st, _ = cv2.connectedComponentsWithStats(m)
     best = None
+    H = bgr.shape[0]
     for i in range(1, n):
         x, y, w, h, a = st[i]
-        if w > 6 * h and w > 150 and a / (w * h) > 0.6 and (best is None or w > best[2]):
-            best = (x, y, w, h)
+        # the COMPANIONS header is a thick bar (not the thin health bar in the HUD)
+        if not (6 * h < w < 16 * h and w > 150 and h >= 0.025 * H and a / (w * h) > 0.6):
+            continue
+        # ...with the word COMPANIONS written in black across it
+        if (cv2.cvtColor(bgr[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY) < 60).mean() < 0.03:
+            continue
+        if best is None or y > best[1]:          # the lowest one (a blue name glow can
+            best = (x, y, w, h)                  # look like a bar too, but sits higher)
     return best
 
 
@@ -1698,6 +1830,13 @@ def _read_droid_screen(bgr):
              (H_ >= 18) & (H_ <= 34) & (S_ > 90) & (V_ > 190),
              (S_ < 45) & (V_ > 110) & (V_ < 235), (H_ >= 70) & (H_ <= 95) & (S_ > 80) & (V_ > 120)]
     rar = var = None
+    word = _variant_word(line)                  # text that stands out from its background
+    wm2 = cv2.resize((255 - _contrast_text(word).astype(np.uint8) * 255), None, fx=2, fy=2,
+                     interpolation=cv2.INTER_NEAREST)
+    for tok in _ocr(wm2, 7, _UP + " ").split():
+        s = _sq(tok)
+        if len(s) >= 3:
+            var = var or _best(s, VARIANTS, 0.7) or next((v for v in VARIANTS if v in s), None)
     for m in masks:
         for tok in _ocr(255 - m.astype(np.uint8) * 255, 7, _UP + " ").split():
             s = _sq(tok)
@@ -1711,13 +1850,16 @@ def _read_droid_screen(bgr):
             break
     if _rainbow_word(line):                      # colour beats OCR for rainbow text
         var = "RAINBOW"
+    elif var in (None, "RAINBOW") and _green_word(line):
+        var = "KYBER"                            # green text = green Kyber
     nh = cv2.cvtColor(namez, cv2.COLOR_BGR2HSV)
     wm = ((nh[:, :, 1] < 70) & (nh[:, :, 2] > 200)).astype(np.uint8) * 255
     pool = [n for n, r in DROID_RARITY.items() if not rar or r.upper() == rar]
     name, sc = _match_name(_ocr(255 - wm, 7) + " " + _ocr(255 - wm, 8), pool)
     if sc < 0.5:
         return None
-    return {"name": name, "variant": var, "source": "droid screen"}
+    kyber = _kyber_colour(line) if var == "KYBER" else None
+    return {"name": name, "variant": var, "kyber": kyber, "source": "droid screen"}
 
 
 def _name_rows(bgr):
@@ -1749,11 +1891,19 @@ def _name_rows(bgr):
     return rows[:6]
 
 
-def _read_card(bgr):
-    """A blueprint card (in the shop or on the ground)."""
+def _read_card(bgr, target=None):
+    """A blueprint card. With target=(x, y) (fractions of the image) only the card
+    whose name sits there is read - that's where a held card always is."""
     H, W = bgr.shape[:2]
     out = []
-    for r in _name_rows(bgr):
+    rows = _name_rows(bgr)
+    if target:
+        def dist(r):
+            cx = (min(c[0] for c in r) + max(c[0] + c[2] for c in r)) / 2 / W
+            cy = np.mean([c[1] + c[3] / 2 for c in r]) / H
+            return abs(cx - target[0]) + abs(cy - target[1])
+        rows = sorted((r for r in rows if dist(r) < 0.15), key=dist)[:1]
+    for r in rows:
         cs = np.array([(c[0] + c[2] / 2, c[1] + c[3] / 2) for c in r])
         h = float(np.median([c[3] for c in r]))
         ang = np.degrees(np.arctan(np.polyfit(cs[:, 0], cs[:, 1], 1)[0])) if len(r) >= 3 else 0.0
@@ -1774,17 +1924,47 @@ def _read_card(bgr):
         line = rot[min(H - 1, int(cy + 0.55 * h)):min(H, int(cy + 1.6 * h)),
                    max(0, int(x0 - 0.4 * h)):min(W, int(x0 + max(5.5 * h, (x1 - x0) * 0.9)))]
         var = _variant_from_line(line, 0.5 * h) if line.size else None
-        if not var:
+        if not var and not target:
             continue                                 # not sure it's a card - skip
-        centre = abs(cx - W / 2) / W + abs(cy - H / 2) / H     # prefer the card you're looking at
-        out.append((sc, var is not None, -centre, {"name": name, "variant": var, "source": "blueprint"}))
-    out.sort(key=lambda o: o[:3], reverse=True)
-    return out[0][3] if out else None
+        kyber = None                                 # blueprints: colour isn't reliable
+        # the held card is closest to the camera, so its name is the biggest
+        out.append((round(sc, 1), h, {"name": name, "variant": var, "kyber": kyber,
+                                      "source": "blueprint"}))
+    out.sort(key=lambda o: (o[0] >= 0.6, o[1], o[0]), reverse=True)
+    return out[0][2] if out else None
+
+
+def holding_card(bgr):
+    """True while a blueprint is held: 'HELD ITEM' over the hotbar or the
+    'TOSS BLUEPRINT ON CRAFTING STATION' hint is on screen."""
+    H, W = bgr.shape[:2]
+    for (x0, y0, x1, y1) in ((0.70, 0.78, 0.92, 0.86), (0.30, 0.72, 0.70, 0.80)):
+        g = cv2.cvtColor(bgr[int(y0 * H):int(y1 * H), int(x0 * W):int(x1 * W)], cv2.COLOR_BGR2GRAY)
+        g = cv2.resize(g, None, fx=2, fy=2)
+        _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        for img in (bw, 255 - bw):
+            t = _sq(pytesseract.image_to_string(img, config="--psm 6"))
+            if any(k in t for k in ("HELDITEM", "TOSSBLUE", "BLUEPRINT", "CRAFTINGSTATION")):
+                return True
+    return False
 
 
 def read_droid(bgr):
-    """{'name', 'variant', 'source'} for the droid on screen, or None."""
-    return _read_droid_screen(bgr) or _read_card(bgr)
+    """{'name', 'variant', 'kyber', 'source'} for the droid on the droid screen or the
+    blueprint card you're holding (held cards sit above your character), or None."""
+    r = _read_droid_screen(bgr)
+    if r:
+        return r
+    if holding_card(bgr):
+        return read_held_card(bgr)
+    return None
+
+
+def read_held_card(bgr):
+    """The card held above your character: its name is always in the same spot."""
+    H, W = bgr.shape[:2]
+    zone = bgr[int(0.08 * H):int(0.72 * H), int(0.18 * W):int(0.68 * W)]
+    return _read_card(zone, target=(0.45, 0.55))
 
 # -------------------------------------------------------------- inventory ---
 # F9 = add the droid on screen to your website inventory, F10 = remove it.
@@ -1841,7 +2021,7 @@ def variant_label(variant, key=None):
     return VARIANT_LABEL.get(variant, variant.title())
 
 
-def change_inventory(name, variant, delta):
+def change_inventory(name, variant, delta, kyber=None):
     """Add (+1) or remove (-1) one droid on the website. Returns a message."""
     player = current_player()
     if not player:
@@ -1854,7 +2034,9 @@ def change_inventory(name, variant, delta):
         key, label = "0", ""
     elif variant == "KYBER":
         if delta > 0:
-            key = "7" + cfg["kyber_default"]
+            key = "7" + (kyber or cfg["kyber_default"])
+        elif kyber and entry.get("7" + kyber, 0) > 0:
+            key = "7" + kyber
         else:
             key = next((k for k in KYBER_KEYS if entry.get(k, 0) > 0), None)
         label = variant_label(variant, key) + " "
@@ -1903,6 +2085,52 @@ def grab_without_overlays(sct):
         state["capture_hide"] = False
 
 
+def show_pending(note=""):
+    """Draw the confirm box for the droid waiting to be added/removed."""
+    p = state.get("inv_pending")
+    if not p:
+        return
+    iconic = DROID_RARITY.get(p["name"]) == "Iconic"
+    if iconic:
+        vtext = "ICONIC"
+    elif not p["variant"]:
+        vtext = "?  (Up/Down to pick)"
+    else:
+        vtext = p["variant"]
+        if p["variant"] == "KYBER":
+            vtext += f" ({KYBER_NAMES.get(p.get('kyber') or cfg['kyber_default'], '?').upper()})"
+    verb = "Add to" if p["action"] == "add" else "Remove from"
+    lines = [f"Droid: {p['name'].upper()}", f"Variant: {vtext}",
+             f"{verb} {p['player']}? Press {p['key']} again"]
+    if not iconic:
+        lines.append("Wrong? Up/Down variant" + (" \u00b7 Left/Right colour"
+                                                  if p["variant"] == "KYBER" else ""))
+    if note:
+        lines.append(note)
+    inv_show(lines, max(1, p["expires"] - time.time()), RED if note else None)
+
+
+def adjust_pending(key):
+    """Up/Down change the variant, Left/Right the Kyber colour, while confirming."""
+    p = state.get("inv_pending")
+    if not p or time.time() > p["expires"] or DROID_RARITY.get(p["name"]) == "Iconic":
+        return False
+    K = keyboard.Key
+    if key in (K.up, K.down):
+        step = 1 if key == K.down else -1
+        i = VARIANTS.index(p["variant"]) if p["variant"] in VARIANTS else (-1 if step > 0 else 0)
+        p["variant"] = VARIANTS[(i + step) % len(VARIANTS)]
+    elif key in (K.left, K.right) and p["variant"] == "KYBER":
+        cols = list(KYBER_NAMES)
+        cur = p.get("kyber") or cfg["kyber_default"]
+        p["kyber"] = cols[(cols.index(cur) + (1 if key == K.right else -1)) % len(cols)]
+    else:
+        return False
+    p["expires"] = time.time() + 12
+    show_pending()
+    return True
+
+
 def inventory_hotkey(action):
     """Called from the hotkey listener: read the droid, then confirm on a 2nd press."""
     if state.get("inv_busy"):
@@ -1920,36 +2148,58 @@ def inventory_hotkey(action):
         state["inv_busy"] = True
         try:
             if pend and pend["action"] == action and time.time() < pend["expires"]:
+                if not pend["variant"] and DROID_RARITY.get(pend["name"]) != "Iconic":
+                    show_pending("Pick the variant with Up/Down first")
+                    return
                 state["inv_pending"] = None
                 inv_show("Saving\u2026", 5)
-                msg = change_inventory(pend["name"], pend["variant"], 1 if action == "add" else -1)
+                msg = change_inventory(pend["name"], pend["variant"], 1 if action == "add" else -1,
+                                       pend.get("kyber"))
                 ok = msg.startswith(("Added", "Removed"))
                 inv_show(("\u2714 " if ok else "") + msg, 6, GREEN if ok else RED)
                 return
             inv_show("Reading droid\u2026", 6)
+            # several looks a moment apart, keep the answer they agree on
+            looks, got, reader = [], None, read_droid
             with mss.mss() as sct:
-                img = grab_without_overlays(sct)
-            r = read_droid(img)
+                for attempt in range(4):
+                    img = grab_without_overlays(sct)
+                    if attempt == 0:
+                        got = _read_droid_screen(img)
+                        if got:
+                            reader = _read_droid_screen
+                        elif holding_card(img):
+                            reader = read_held_card
+                            got = read_held_card(img)
+                    else:
+                        got = reader(img)
+                    if got and got.get("variant"):
+                        looks.append(got)
+                    keys = [(g["name"], g["variant"], g.get("kyber")) for g in looks]
+                    if keys and max(keys.count(k) for k in keys) >= 2:
+                        break                     # two looks agree - good enough
+                    if attempt == 0 and not got:
+                        break                     # nothing there at all
+                    time.sleep(0.25)
+            if not looks and got:
+                looks = [got]                     # name only - report it
+            r = None
+            if looks:
+                keys = [(g["name"], g["variant"], g.get("kyber")) for g in looks]
+                best = max(set(keys), key=keys.count)
+                r = looks[keys.index(best)]
             if not r:
-                inv_show(["No droid found.", "Open the droid screen or look straight",
-                          "at a blueprint card, then try again."], 6, RED)
-                return
-            if not r["variant"]:
-                inv_show([f"Droid: {r['name'].upper()}", "Variant: couldn't read - try again"],
-                         6, RED)
+                inv_show(["No droid found.", "Open the droid screen, or hold the",
+                          "blueprint card, then try again."], 6, RED)
                 return
             player = current_player()
             if not player:
                 inv_show("No players on your website login yet", 5, RED)
                 return
-            iconic = DROID_RARITY.get(r["name"]) == "Iconic"
             state["inv_pending"] = {"action": action, "name": r["name"], "variant": r["variant"],
-                                    "expires": time.time() + 8}
-            question = (f"Add to {player['name']}? Press {key_name} again" if action == "add"
-                        else f"Remove from {player['name']}? Press {key_name} again")
-            inv_show([f"Droid: {r['name'].upper()}",
-                      f"Variant: {'ICONIC' if iconic else r['variant']}",
-                      question], 8)
+                                    "kyber": r.get("kyber"), "expires": time.time() + 12,
+                                    "player": player["name"], "key": key_name}
+            show_pending()
         except AuthError as e:
             inv_show(f"Website said no: {e}", 6, RED)
         except OSError:
@@ -2055,7 +2305,7 @@ def force_focus(win):
 
 def select_area(root):
     """Full-screen see-through layer: drag a box with the mouse."""
-    m = PRIMARY
+    m = screen()
     win = tk.Toplevel(root)
     win.overrideredirect(True)
     win.geometry(f"{m['width']}x{m['height']}+{m['left']}+{m['top']}")
@@ -2112,7 +2362,7 @@ def run_windows():
     root.attributes("-topmost", True)
     root.attributes("-alpha", 0.88)
     root.configure(bg=BG)
-    root.geometry(f"+{cfg['overlay_x']}+{cfg['overlay_y']}")
+    root.geometry(f"+{screen()['left'] + cfg['overlay_x']}+{screen()['top'] + cfg['overlay_y']}")
 
     frame = tk.Frame(root, bg=BG, padx=14, pady=10,
                      highlightthickness=1, highlightbackground="#2b3038")
@@ -2142,6 +2392,7 @@ def run_windows():
 
     make_click_through(root)
     shown = ["full"]
+    placed = [""]
 
     invwin = tk.Toplevel(root)
     invwin.overrideredirect(True)
@@ -2258,7 +2509,8 @@ def run_windows():
         if want_inv:
             invtext.config(text="\n".join(state["inv_lines"]), fg=state["inv_color"] or FG)
             if not inv_shown[0]:
-                invwin.geometry(f"+{cfg['mini_x']}+{cfg['mini_y'] + 34}")
+                mon = screen()
+                invwin.geometry(f"+{mon['left'] + cfg['mini_x']}+{mon['top'] + cfg['mini_y'] + 34}")
                 invwin.deiconify()
                 make_click_through(invwin)
             invwin.attributes("-topmost", True)
@@ -2279,13 +2531,18 @@ def run_windows():
             else:
                 if view == "full":
                     frame.pack()
-                    root.geometry(f"+{cfg['overlay_x']}+{cfg['overlay_y']}")
                 else:
                     mini.pack()
-                    root.geometry(f"+{cfg['mini_x']}+{cfg['mini_y']}")
                 root.deiconify()
                 make_click_through(root)
             shown[0] = view
+        if view != "none":                       # keep the boxes on the watched screen
+            mon = screen()
+            ox, oy = (("overlay_x", "overlay_y") if view == "full" else ("mini_x", "mini_y"))
+            pos = f"+{mon['left'] + cfg[ox]}+{mon['top'] + cfg[oy]}"
+            if pos != placed[0]:
+                root.geometry(pos)
+                placed[0] = pos
         if view == "mini":
             mini_dot.config(fg=GREEN if state["enabled"] else (RED if state["error"] else AMBER))
         if view != "none":
@@ -2444,8 +2701,27 @@ def start_tray():
             account_items.append(pystray.MenuItem("Inventory player (F9/F10)",
                                                   pystray.Menu(*player_items)))
         account_items.append(pystray.MenuItem("Sign out", do_sign_out))
+    def pick_screen(value):
+        def handler(icon, item):
+            cfg["monitor"] = value
+            save_config()
+            _screen_cache["time"] = 0
+            notify("Watching " + ("the screen Fortnite is on" if value == "auto"
+                                  else f"screen {value}"), 4)
+        return handler
+
+    def screen_is(value):
+        return lambda item: str(cfg.get("monitor", "auto")) == value
+
+    screen_items = [pystray.MenuItem("Auto (the screen Fortnite is on)", pick_screen("auto"),
+                                     checked=screen_is("auto"), radio=True)]
+    for i, m in enumerate(MONITORS, 1):
+        label = f"Screen {i} \u2013 {m['width']}\u00d7{m['height']}" + (" (main)" if i == 1 else "")
+        screen_items.append(pystray.MenuItem(label, pick_screen(str(i)),
+                                             checked=screen_is(str(i)), radio=True))
     menu = pystray.Menu(
         pystray.MenuItem(f"SW Key Helper v{VERSION}", None, enabled=False),
+        pystray.MenuItem("Screen", pystray.Menu(*screen_items)),
         *account_items,
         pystray.MenuItem("Check for updates", do_update),
         pystray.MenuItem("Open settings folder", open_folder),
