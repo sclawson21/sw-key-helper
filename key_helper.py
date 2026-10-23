@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.3.8"
+VERSION = "1.3.9"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -297,7 +297,9 @@ def start_mode():
     state["menu_open"] = False
     state["rolls"], state["trait"], state["status"] = 0, "", ""
     state["clicks"], state["spent"], state["cost"] = 0, 0.0, ""
-    state["active_secs"], state["earn"] = 0.0, {"samples": [], "start": None, "last": None}
+    state["active_secs"] = 0.0
+    state["earn"] = {"samples": [], "start": None, "last": None, "made": 0.0,
+                     "prev": None, "text": "", "text_time": 0.0}
     state["pending_roll"], state["roll_times"] = None, []
     state["last_cost"] = None
     if state["mode"] == "traits":
@@ -2287,6 +2289,11 @@ def track_earnings(sct):
             s.clear()
         elif v > last * 1.5 and now - s[-1][0] < 60:
             return                                # misread - ignore
+    # credits made while active: add every increase, skip drops (spending) and the
+    # gap after a pause (so time spent paused isn't counted)
+    if e["prev"] is not None and v > e["prev"]:
+        e["made"] += v - e["prev"]
+    e["prev"] = v
     if e["start"] is None:
         e["start"] = v
     s.append((now, v))
@@ -2295,6 +2302,22 @@ def track_earnings(sct):
 
 
 def earnings_text():
+    """Overlay lines for the clicker. The estimate refreshes once a minute."""
+    e = state["earn"]
+    now = time.time()
+    if not e["text"] or e["text"].startswith("Measuring") or now - e["text_time"] >= 60:
+        new = _estimate_text()
+        if new != e["text"]:
+            e["text"], e["text_time"] = new, now
+    made = f"Made while active: +{format_amount(e['made'])}" if e["made"] > 0 else \
+        "Made while active: \u2013"
+    nxt = ""
+    if not e["text"].startswith("Measuring"):
+        nxt = f" \u00b7 next update in {max(0, 60 - int(now - e['text_time']))}s"
+    return f"{e['text']}{nxt}\n{made}"
+
+
+def _estimate_text():
     s = state["earn"]["samples"]
     if len(s) < 3 or s[-1][0] - s[0][0] < 20:
         return "Measuring your earnings\u2026 (needs ~20 s)"
@@ -2304,8 +2327,7 @@ def earnings_text():
     mins = 1e15 / rate / 60
     per = (f"{mins * 60:.0f} sec" if mins < 1 else f"{mins:.1f} min" if mins < 10
            else f"{mins:.0f} min" if mins < 120 else f"{mins / 60:.1f} h")
-    return (f"Earning ~{format_amount(rate * 60)}/min \u00b7 1 Qa \u2248 {per}\n"
-            f"Balance {format_amount(s[-1][1])}")
+    return f"Earning ~{format_amount(rate * 60)}/min \u00b7 1 Qa \u2248 {per}"
 
 
 def fmt_duration(sec):
@@ -2324,6 +2346,8 @@ def run_clicker():
         want = cfg["clicker_window"].strip().lower()
         if want and want not in foreground_title().lower():
             state["status"] = f"Paused - {cfg['clicker_window']} isn't in front"
+            state["earn"]["prev"] = None          # don't count what's earned while paused
+            state["earn"]["samples"].clear()
             time.sleep(0.25)
             next_click = time.perf_counter()
             last_tick = time.time()
