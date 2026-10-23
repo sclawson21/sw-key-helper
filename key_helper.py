@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.3.9"
+VERSION = "1.4.0"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -244,6 +244,8 @@ state = {
     "trait": "", "rolls": 0, "status": "",
     "menu_stage": "mode", "pick_index": 0, "choice_index": 0,
     "trait_queue": [], "trait_side": "left", "side_checked": None,
+    "fish_round": {"active": False, "chips": 0, "credits": 0, "chips0": None, "cred0": None},
+    "fish_last_prompt": 0.0,
     "inv_pending": None, "inv_busy": False, "inv_lines": [], "inv_until": 0.0,
     "inv_color": None, "capture_hide": False,
     "clicks": 0, "spent": 0.0, "cost": "", "pending_roll": None, "roll_times": [],
@@ -302,6 +304,9 @@ def start_mode():
                      "prev": None, "text": "", "text_time": 0.0}
     state["pending_roll"], state["roll_times"] = None, []
     state["last_cost"] = None
+    if state["mode"] == "fishing":
+        state["enabled"] = True
+        threading.Thread(target=fish_tracker, daemon=True).start()
     if state["mode"] == "traits":
         state["trait_queue"] = {"left": ["left"], "right": ["right"],
                                 "both": ["left", "right"]}.get(cfg["trait_droids"], ["left"])
@@ -648,6 +653,8 @@ def scanner():
                 t0 = time.perf_counter()
                 img = np.array(sct.grab(get_search_area()))[:, :, :3]
                 tiles = fishing_row(img)
+                if tiles:
+                    state["fish_last_prompt"] = time.time()
                 keys, strip = read_keys(img, tiles)
                 state["scan_ms"] = int((time.perf_counter() - t0) * 1000)
                 state["reading"] = arrow(keys) if keys else (
@@ -2227,6 +2234,169 @@ def inventory_hotkey(action):
     threading.Thread(target=work, daemon=True).start()
 
 
+
+# ------------------------------------------------------------ fishing stats ---
+# Chips and credits earned per fishing round, read from the HUD counters, plus
+# your best round ever (saved in fish_stats.json).
+
+FISH_FILE = "fish_stats.json"
+ROUND_GAP = 60          # no fishing prompt for this long = the round is over
+
+
+def _hud_runs(txt, h):
+    hs = cv2.cvtColor(txt, cv2.COLOR_BGR2HSV)
+    wm = ((hs[:, :, 1] < 35) & (hs[:, :, 2] > 235)).astype(np.uint8)
+    n, _, st, _ = cv2.connectedComponentsWithStats(wm)
+    chars = sorted([st[i] for i in range(1, n) if st[i][3] > 0.3 * h
+                    or (st[i][4] > 3 and st[i][1] > 0.45 * txt.shape[0])], key=lambda c: c[0])
+    runs = []
+    for c in chars:
+        if runs and c[0] - (runs[-1][-1][0] + runs[-1][-1][2]) <= 0.5 * h:
+            runs[-1].append(c)
+        else:
+            runs.append([c])
+    return wm, runs
+
+
+def _hud_ocr(wm, run):
+    a, b = max(0, run[0][0] - 4), run[-1][0] + run[-1][2] + 4
+    img = cv2.resize(255 - wm[:, a:b] * 255, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+    img = cv2.copyMakeBorder(img, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
+    t = pytesseract.image_to_string(img, config="--psm 7").strip()
+    t = re.sub(r"[^0-9A-Za-z.]", "", t).replace("H", "K").replace("k", "K")
+    return t
+
+
+def read_hud(bgr):
+    """{'credits': value, 'chips': value} from the bottom-left HUD (either may be None)."""
+    H, W = bgr.shape[:2]
+    x1 = int(0.35 * W)
+    reg = bgr[int(0.70 * H):int(0.92 * H), :x1]
+    hsv = cv2.cvtColor(reg, cv2.COLOR_BGR2HSV)
+    n, _, st, _ = cv2.connectedComponentsWithStats(cv2.inRange(hsv, (12, 120, 150), (35, 255, 255)))
+    coins = [st[i] for i in range(1, n) if st[i][3] > 0.035 * H
+             and 0.7 < st[i][2] / st[i][3] < 1.4 and st[i][4] > 0.4 * st[i][2] * st[i][3]]
+    out = {"credits": None, "chips": None}
+    if not coins:
+        return out
+    x, y, w, h, _ = min(coins, key=lambda c: c[1])
+    txt = reg[max(0, y - int(0.15 * h)):y + int(0.85 * h), x + w:x1]
+    wm, runs = _hud_runs(txt, h)
+    runs = [r for r in runs if max(c[3] for c in r) > 0.45 * h]
+    if runs:
+        t = _hud_ocr(wm, runs[0])
+        if re.search(r"[A-Za-z]$", t):
+            out["credits"] = parse_amount(t)
+        start = runs[0][-1][0] + runs[0][-1][2]
+    else:
+        start = 0
+    t2 = reg[max(0, y - int(0.15 * h)):y + int(0.55 * h), x + w + start:x1]
+    wm2, r2 = _hud_runs(t2, 0.6 * h)
+    r2 = [r for r in r2 if len(r) >= 2]
+    if r2:
+        t = _hud_ocr(wm2, r2[0])
+        if re.fullmatch(r"\d+(\.\d+)?[KMBT]?", t):
+            out["chips"] = parse_amount(t)
+    return out
+
+
+def load_fish():
+    try:
+        with open(FISH_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"best_chips": 0, "best_credits": 0, "rounds": 0}
+
+
+def save_fish(d):
+    try:
+        with open(FISH_FILE, "w") as f:
+            json.dump(d, f)
+    except Exception as e:
+        print("Couldn't save fishing stats:", e)
+
+
+class _Steady:
+    """Only trust a HUD number once two reads in a row agree."""
+    def __init__(self):
+        self.last, self.value = None, None
+
+    def feed(self, v):
+        if v is not None and self.last is not None and abs(v - self.last) <= 0.006 * max(v, 1):
+            self.value = v
+        self.last = v if v is not None else self.last
+        return self.value
+
+
+def fish_tracker():
+    """Background thread: while Fishing runs, watch the chip and credit counters."""
+    fr = state["fish_round"]
+    chips, creds = _Steady(), _Steady()
+    with mss.mss() as sct:
+        while state["enabled"] and state["mode"] == "fishing" and not state["quit"]:
+            try:
+                hud = read_hud(grab_screen(sct))
+                c, k = chips.feed(hud["chips"]), creds.feed(hud["credits"])
+                now = time.time()
+                prompt = now - state.get("fish_last_prompt", 0) < 5
+                if fr["active"]:
+                    if c is not None:
+                        if fr["chips0"] is None:
+                            fr["chips0"] = c
+                        fr["chips"] = max(0, c - fr["chips0"])
+                    if k is not None:
+                        if fr["cred0"] is None:
+                            fr["cred0"] = k
+                        fr["credits"] = max(fr["credits"], k - fr["cred0"])
+                    if now - state.get("fish_last_prompt", 0) > ROUND_GAP:
+                        finish_round()
+                elif prompt:
+                    fr.update(active=True, chips0=c, cred0=k, chips=0, credits=0,
+                              started=now)
+            except Exception as e:
+                print("Fishing stats error:", e)
+            time.sleep(2)
+    if fr["active"]:
+        finish_round()
+
+
+def finish_round():
+    fr = state["fish_round"]
+    fr["active"] = False
+    if fr["chips"] <= 0 and fr["credits"] <= 0:
+        return
+    d = load_fish()
+    d["rounds"] = d.get("rounds", 0) + 1
+    new_best = []
+    if fr["chips"] > d.get("best_chips", 0):
+        d["best_chips"] = fr["chips"]
+        new_best.append("chips")
+    if fr["credits"] > d.get("best_credits", 0):
+        d["best_credits"] = fr["credits"]
+        new_best.append("credits")
+    save_fish(d)
+    fr["last"] = (fr["chips"], fr["credits"])
+    msg = f"Round done: +{format_amount(fr['chips'])} chips · +{format_amount(fr['credits'])} credits"
+    if new_best:
+        msg += "  ⭐ NEW BEST " + " & ".join(new_best).upper() + "!"
+    notify(msg, 15)
+
+
+def fishing_stats_text():
+    fr, d = state["fish_round"], load_fish()
+    if fr["active"]:
+        cur = (f"This round: +{format_amount(fr['chips'])} chips · "
+               f"+{format_amount(fr['credits'])} credits")
+    elif fr.get("last"):
+        cur = (f"Last round: +{format_amount(fr['last'][0])} chips · "
+               f"+{format_amount(fr['last'][1])} credits")
+    else:
+        cur = "This round: starts at the first PRESS TO FISH!"
+    best = (f"Best round: +{format_amount(d.get('best_chips', 0))} chips · "
+            f"+{format_amount(d.get('best_credits', 0))} credits")
+    return cur + "\n" + best
+
+
 # ------------------------------------------------------------ auto clicker ---
 
 def foreground_title():
@@ -2621,9 +2791,10 @@ def run_windows():
                 reading.config(text=f"Reading: {state['reading'] or DASH}")
                 pressed.config(text=f"Pressed: {state['pressed'] or DASH}")
                 area = "custom" if cfg["search_area"] else "auto"
-                stats.config(text=f"Scan {state['scan_ms']} ms \u00b7 "
+                stats.config(text=fishing_stats_text() + "\n"
+                                  f"Scan {state['scan_ms']} ms \u00b7 "
                                   f"Delay {int(cfg['press_delay'] * 1000)} ms \u00b7 "
-                                  f"Inputs {state['inputs']} \u00b7 Area {area}")
+                                  f"Inputs {state['inputs']} \u00b7 Area {area}", wraplength=440)
             hints.config(text="Insert menu/start/stop \u00b7 PgUp/PgDn faster/slower\n"
                               f"{cfg['inv_add_key'].upper()}/{cfg['inv_remove_key'].upper()} add/remove droid "
                               "\u00b7 Home set area \u00b7 End quit")
