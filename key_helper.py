@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.3.5"
+VERSION = "1.3.8"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -126,6 +126,7 @@ DEFAULTS = {
     "overlay_x": 20,
     "overlay_y": 120,
     "mini_badge": True,         # small "running" badge in the top-left when idle
+    "discreet": False,          # discreet mode: hide the idle badge (click the tray icon)
     "mini_x": 8,
     "mini_y": 8,
     "tray_icon": True,          # icon by the clock: right-click to update or quit
@@ -296,6 +297,7 @@ def start_mode():
     state["menu_open"] = False
     state["rolls"], state["trait"], state["status"] = 0, "", ""
     state["clicks"], state["spent"], state["cost"] = 0, 0.0, ""
+    state["active_secs"], state["earn"] = 0.0, {"samples": [], "start": None, "last": None}
     state["pending_roll"], state["roll_times"] = None, []
     state["last_cost"] = None
     if state["mode"] == "traits":
@@ -2238,16 +2240,102 @@ def foreground_title():
         return ""
 
 
+def read_balance(bgr):
+    """Your credit balance from the bottom-left of the HUD (the number next to the
+    gold coin), e.g. 6.23Qa -> 6.23e15. None if it can't be read."""
+    H, W = bgr.shape[:2]
+    x1 = int(0.30 * W)
+    reg = bgr[int(0.70 * H):int(0.92 * H), :x1]
+    hsv = cv2.cvtColor(reg, cv2.COLOR_BGR2HSV)
+    n, _, st, _ = cv2.connectedComponentsWithStats(cv2.inRange(hsv, (12, 120, 150), (35, 255, 255)))
+    coins = [st[i] for i in range(1, n) if st[i][3] > 0.035 * H
+             and 0.7 < st[i][2] / st[i][3] < 1.4 and st[i][4] > 0.4 * st[i][2] * st[i][3]]
+    if not coins:
+        return None
+    x, y, w, h, _ = min(coins, key=lambda c: c[1])          # topmost coin = the balance
+    txt = reg[max(0, y - int(0.15 * h)):y + int(0.85 * h), x + w:min(x1, x + w + int(6 * h))]
+    hs = cv2.cvtColor(txt, cv2.COLOR_BGR2HSV)
+    wm = ((hs[:, :, 1] < 35) & (hs[:, :, 2] > 235)).astype(np.uint8)
+    n, _, st, _ = cv2.connectedComponentsWithStats(wm)
+    chars = sorted([st[i] for i in range(1, n) if st[i][3] > 0.3 * h
+                    or (st[i][4] > 4 and st[i][1] > 0.5 * txt.shape[0])], key=lambda c: c[0])
+    keep = []
+    for c in chars:                               # stop at the gap after the number
+        if keep and c[0] - (keep[-1][0] + keep[-1][2]) > 0.5 * h:
+            break
+        keep.append(c)
+    if not keep:
+        return None
+    a, b = max(0, keep[0][0] - 4), keep[-1][0] + keep[-1][2] + 4
+    img = cv2.resize(255 - wm[:, a:b] * 255, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+    img = cv2.copyMakeBorder(img, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
+    t = pytesseract.image_to_string(img, config="--psm 7").strip()
+    return parse_amount(t) if re.search(r"[A-Za-z]$", t) else None
+
+
+def track_earnings(sct):
+    """Sample the balance and keep a running credits-per-second estimate."""
+    e = state["earn"]
+    v = read_balance(grab_screen(sct))
+    now = time.time()
+    if v is None:
+        return
+    s = e["samples"]
+    if s:
+        last = s[-1][1]
+        if v < last * 0.98:                       # spent credits - start measuring again
+            s.clear()
+        elif v > last * 1.5 and now - s[-1][0] < 60:
+            return                                # misread - ignore
+    if e["start"] is None:
+        e["start"] = v
+    s.append((now, v))
+    del s[:-60]                                   # last ~5 minutes
+    e["last"] = v
+
+
+def earnings_text():
+    s = state["earn"]["samples"]
+    if len(s) < 3 or s[-1][0] - s[0][0] < 20:
+        return "Measuring your earnings\u2026 (needs ~20 s)"
+    rate = (s[-1][1] - s[0][1]) / (s[-1][0] - s[0][0])
+    if rate <= 0:
+        return "Balance isn't going up yet"
+    mins = 1e15 / rate / 60
+    per = (f"{mins * 60:.0f} sec" if mins < 1 else f"{mins:.1f} min" if mins < 10
+           else f"{mins:.0f} min" if mins < 120 else f"{mins / 60:.1f} h")
+    return (f"Earning ~{format_amount(rate * 60)}/min \u00b7 1 Qa \u2248 {per}\n"
+            f"Balance {format_amount(s[-1][1])}")
+
+
+def fmt_duration(sec):
+    sec = int(sec)
+    return f"{sec // 3600}:{sec // 60 % 60:02d}:{sec % 60:02d}" if sec >= 3600 else \
+        f"{sec // 60}:{sec % 60:02d}"
+
+
 def run_clicker():
     """Scrap Hit: left-click continuously. Potion Grab: press F every few seconds."""
     next_click = time.perf_counter()
+    last_tick, next_sample = time.time(), 0.0
+    sct = mss.mss()
     while state["enabled"] and state["mode"] == "clicker" and not state["quit"]:
+        now = time.time()
         want = cfg["clicker_window"].strip().lower()
         if want and want not in foreground_title().lower():
             state["status"] = f"Paused - {cfg['clicker_window']} isn't in front"
             time.sleep(0.25)
             next_click = time.perf_counter()
+            last_tick = time.time()
             continue
+        state["active_secs"] += min(1.0, now - last_tick)   # only time actually running
+        last_tick = now
+        if now >= next_sample:                    # check the balance every 5 seconds
+            next_sample = now + 5
+            try:
+                track_earnings(sct)
+            except Exception as e:
+                print("Balance read failed:", e)
         if cfg["clicker_kind"] == "potion":
             press(cfg["interact_key"])
             state["clicks"] += 1
@@ -2256,6 +2344,8 @@ def run_clicker():
                    and not state["quit"] and cfg["clicker_kind"] == "potion"):
                 state["status"] = f"Pressed F \u00b7 next in {end - time.time():.0f}s"
                 time.sleep(0.1)
+                state["active_secs"] += min(1.0, time.time() - last_tick)
+                last_tick = time.time()
             continue
         state["status"] = "Clicking"
         pydirectinput.mouseDown()
@@ -2491,16 +2581,18 @@ def run_windows():
             elif state["mode"] == "clicker":
                 where = (f"only while {cfg['clicker_window']} is in front"
                          if cfg["clicker_window"] else "anywhere")
+                active = fmt_duration(state.get("active_secs", 0))
                 if cfg["clicker_kind"] == "potion":
-                    reading.config(text=f"Potion Grab \u00b7 F presses: {state['clicks']:,}")
+                    reading.config(text=f"Potion Grab \u00b7 Time active: {active}")
                     pressed.config(text=f"Every {cfg['potion_interval']}s \u00b7 "
                                         f"{state['status'] or DASH}")
-                    stats.config(text=f"Presses F {where}", wraplength=440)
+                    what = f"Presses F {where}"
                 else:
-                    reading.config(text=f"Scrap Hit \u00b7 Clicks: {state['clicks']:,}")
+                    reading.config(text=f"Scrap Hit \u00b7 Time active: {active}")
                     pressed.config(text=f"Speed: {cfg['clicker_cps']}/s \u00b7 "
                                         f"{state['status'] or DASH}")
-                    stats.config(text=f"Clicks where your mouse is, {where}", wraplength=440)
+                    what = f"Clicks where your mouse is, {where}"
+                stats.config(text=earnings_text() + "\n" + what, wraplength=440)
             else:
                 reading.config(text=f"Reading: {state['reading'] or DASH}")
                 pressed.config(text=f"Pressed: {state['pressed'] or DASH}")
@@ -2530,7 +2622,8 @@ def run_windows():
         full = cfg["overlay"] and (
             not cfg["hide_when_paused"] or state["enabled"] or state["error"]
             or state["menu_open"] or time.time() < state["show_until"])
-        view = "full" if full else ("mini" if cfg["mini_badge"] else "none")
+        view = "full" if full else ("mini" if cfg["mini_badge"] and not cfg["discreet"]
+                                    else "none")
         if state["capture_hide"]:
             view = "none"
         if view != shown[0]:
@@ -2608,36 +2701,99 @@ def check_for_update(manual=False):
                       if a["name"].lower().endswith(".exe")), None)
         if not asset:
             return
-        notify(f"Downloading update {latest}...", 60)
+        notify(f"Downloading update {latest}...", 120)
         exe = sys.executable
-        new_path, old_path = exe + ".new", exe + ".old"
-        req = urllib.request.Request(asset["browser_download_url"],
-                                     headers={"User-Agent": "SW-Key-Helper"})
-        with urllib.request.urlopen(req, timeout=60) as r, open(new_path, "wb") as f:
-            while True:
-                chunk = r.read(1 << 20)
-                if not chunk:
+        new_path = exe + ".new"
+        size = asset.get("size")
+        err = None
+        for attempt in range(3):                  # big file - retry if the connection drops
+            try:
+                req = urllib.request.Request(asset["browser_download_url"],
+                                             headers={"User-Agent": "SW-Key-Helper"})
+                with urllib.request.urlopen(req, timeout=120) as r, open(new_path, "wb") as f:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                if not size or os.path.getsize(new_path) == size:
+                    err = None
                     break
-                f.write(chunk)
-        if os.path.getsize(new_path) != asset.get("size", os.path.getsize(new_path)):
-            os.remove(new_path)
-            notify("Update download was incomplete - will try again next start")
-            return
-        # A running .exe can't be overwritten on Windows, but it can be renamed
-        if os.path.exists(old_path):
-            os.remove(old_path)
-        os.rename(exe, old_path)
-        os.rename(new_path, exe)
-        notify(f"Updated to {latest} - restarting...", 10)
-        tray_message(f"Updated to {latest} - restarting...")
-        state["restart_path"] = exe
-        time.sleep(1.5)
-        state["quit"] = True
+                err = f"download incomplete ({os.path.getsize(new_path)} of {size} bytes)"
+            except Exception as e:
+                err = f"download failed: {e}"
+            print("Update attempt", attempt + 1, "-", err)
+            time.sleep(2)
+        if err:
+            raise RuntimeError(err)
+        install_update(exe, new_path, latest)
     except Exception as e:
-        print("Update check failed:", e)
-        notify(f"v{VERSION} - couldn't check for updates")
+        print("Update failed:", repr(e))
+        notify(f"Update failed: {e}"[:120], 15)
         if manual:
-            tray_message("Couldn't check for updates - are you online?")
+            tray_message(f"Update failed: {e}"[:200])
+
+
+def install_update(exe, new_path, latest):
+    """Swap the new .exe in and restart. Windows can't overwrite a running .exe, but it
+    can usually rename it; if that's blocked (antivirus, locks), a small helper script
+    finishes the swap right after this copy closes."""
+    old_path = exe + ".old"
+    try:
+        if os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+            except OSError:                       # still locked - just park it elsewhere
+                old_path = f"{exe}.old{int(time.time())}"
+        os.rename(exe, old_path)
+        try:
+            os.rename(new_path, exe)
+        except OSError:
+            os.rename(old_path, exe)              # put the working copy back
+            raise
+        state["restart_path"] = exe
+    except OSError as e:
+        print("Direct swap failed, using helper script:", e)
+        bat = os.path.join(os.environ.get("TEMP", BASE_DIR), "sw_key_helper_update.bat")
+        with open(bat, "w") as f:
+            f.write(f"""@echo off
+rem SW Key Helper updater - waits for the app to close, swaps in the new version
+:wait
+tasklist /FI "PID eq {os.getpid()}" | find "{os.getpid()}" >nul && (timeout /t 1 >nul & goto wait)
+set n=0
+:swap
+move /y "{new_path}" "{exe}" >nul 2>&1 && goto start
+set /a n+=1
+if %n% lss 20 (timeout /t 1 >nul & goto swap)
+goto end
+:start
+start "" "{exe}"
+:end
+del "%~f0"
+""")
+        subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)   # no window
+        state["restart_path"] = None
+    notify(f"Updated to {latest} - restarting...", 10)
+    tray_message(f"Updated to {latest} - restarting...")
+    time.sleep(1.5)
+    state["quit"] = True
+
+
+def cleanup_old_versions():
+    """Delete copies left behind by earlier updates."""
+    if not getattr(sys, "frozen", False):
+        return
+    folder, name = os.path.split(sys.executable)
+    for _ in range(10):
+        left = [f for f in os.listdir(folder) if f.startswith(name + ".old")]
+        for f in left:
+            try:
+                os.remove(os.path.join(folder, f))
+            except OSError:
+                pass
+        if not [f for f in os.listdir(folder) if f.startswith(name + ".old")]:
+            return
+        time.sleep(0.5)
 
 
 # --------------------------------------------------------------- tray icon ---
@@ -2667,6 +2823,14 @@ def start_tray():
     except ImportError:
         print("pystray not installed - no tray icon")
         return
+
+    def toggle_discreet(icon, item):
+        cfg["discreet"] = not cfg["discreet"]
+        save_config()
+        if not cfg["discreet"]:
+            notify("Discreet mode off", 2)
+        tray_message("Discreet mode on - the badge only shows while something is running"
+                     if cfg["discreet"] else "Discreet mode off")
 
     def do_update(icon, item):
         threading.Thread(target=check_for_update, args=(True,), daemon=True).start()
@@ -2733,6 +2897,8 @@ def start_tray():
         pystray.MenuItem(f"SW Key Helper v{VERSION}", None, enabled=False),
         pystray.MenuItem("Screen", pystray.Menu(*screen_items)),
         *account_items,
+        pystray.MenuItem("Discreet mode (hide badge when idle)", toggle_discreet,
+                         checked=lambda item: cfg["discreet"], default=True),
         pystray.MenuItem("Check for updates", do_update),
         pystray.MenuItem("Open settings folder", open_folder),
         pystray.Menu.SEPARATOR,
@@ -2746,23 +2912,11 @@ def start_tray():
         print("Tray icon failed:", e)
 
 
-def cleanup_old_version():
-    if getattr(sys, "frozen", False):
-        old = sys.executable + ".old"
-        for _ in range(10):                       # the old copy may still be closing
-            try:
-                if os.path.exists(old):
-                    os.remove(old)
-                return
-            except OSError:
-                time.sleep(0.5)
-
-
 def main():
     print(__doc__)
     print("Version", VERSION)
     if getattr(sys, "frozen", False):
-        threading.Thread(target=cleanup_old_version, daemon=True).start()
+        threading.Thread(target=cleanup_old_versions, daemon=True).start()
         if cfg["auto_update"]:
             threading.Thread(target=check_for_update, daemon=True).start()
     if not require_login():
