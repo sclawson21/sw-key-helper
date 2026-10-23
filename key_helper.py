@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.4.2"
+VERSION = "1.4.4"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -244,7 +244,7 @@ state = {
     "trait": "", "rolls": 0, "status": "",
     "menu_stage": "mode", "pick_index": 0, "choice_index": 0,
     "trait_queue": [], "trait_side": "left", "side_checked": None,
-    "fish_round": {"active": False, "chips": 0, "credits": 0, "chips0": None, "cred0": None},
+    "fish_round": {"active": False, "chips": 0, "chips0": None},
     "fish_last_prompt": 0.0,
     "inv_pending": None, "inv_busy": False, "inv_lines": [], "inv_until": 0.0,
     "inv_color": None, "capture_hide": False,
@@ -2243,61 +2243,106 @@ FISH_FILE = "fish_stats.json"
 ROUND_GAP = 60          # no fishing prompt for this long = the round is over
 
 
-def _hud_runs(txt, h):
-    hs = cv2.cvtColor(txt, cv2.COLOR_BGR2HSV)
-    wm = ((hs[:, :, 1] < 35) & (hs[:, :, 2] > 235)).astype(np.uint8)
-    n, _, st, _ = cv2.connectedComponentsWithStats(wm)
-    chars = sorted([st[i] for i in range(1, n) if st[i][3] > 0.3 * h
-                    or (st[i][4] > 3 and st[i][1] > 0.45 * txt.shape[0])], key=lambda c: c[0])
-    runs = []
-    for c in chars:
-        if runs and c[0] - (runs[-1][-1][0] + runs[-1][-1][2]) <= 0.5 * h:
-            runs[-1].append(c)
-        else:
-            runs.append([c])
-    return wm, runs
+_hud_coin = {"box": None}
 
 
-def _hud_ocr(wm, run):
-    a, b = max(0, run[0][0] - 4), run[-1][0] + run[-1][2] + 4
-    img = cv2.resize(255 - wm[:, a:b] * 255, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+def _find_coin(bgr):
+    """The gold credits coin at the bottom-left (its position is remembered, because
+    orange or yellow scenery behind it can make it hard to find again)."""
+    H, W = bgr.shape[:2]
+    y0 = int(0.70 * H)
+    reg = bgr[y0:int(0.92 * H), :int(0.30 * W)]
+    hsv = cv2.cvtColor(reg, cv2.COLOR_BGR2HSV)
+    n, _, st, _ = cv2.connectedComponentsWithStats(cv2.inRange(hsv, (12, 120, 150), (35, 255, 255)))
+    coins = [st[i] for i in range(1, n) if 0.035 * H < st[i][3] < 0.09 * H
+             and 0.75 < st[i][2] / st[i][3] < 1.3 and st[i][4] > 0.5 * st[i][2] * st[i][3]]
+    old = _hud_coin["box"]
+    if old:
+        coins = [c for c in coins if abs(c[3] - old[3]) < 0.2 * old[3]
+                 and abs(c[0] - old[0]) < old[3] and abs(c[1] + y0 - old[1]) < old[3]]
+    if coins:
+        x, y, w, h, _ = min(coins, key=lambda c: c[1])
+        _hud_coin["box"] = (int(x), int(y + y0), int(w), int(h))
+    return _hud_coin["box"]
+
+
+def _hud_number(bgr, x0, x1, y0, y1, h, ocr=True):
+    """Read the white HUD number in a box. Only letter-sized white shapes are kept, so
+    bright scenery behind the text (lights, white floors) is ignored."""
+    H, W = bgr.shape[:2]
+    x0, x1, y0, y1 = max(0, int(x0)), min(W, int(x1)), max(0, int(y0)), min(H, int(y1))
+    if x1 - x0 < 5 or y1 - y0 < 5:
+        return "", None
+    box = bgr[y0:y1, x0:x1]
+    hs = cv2.cvtColor(box, cv2.COLOR_BGR2HSV)
+    wm = ((hs[:, :, 1] < 45) & (hs[:, :, 2] > 225)).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(wm)
+    keep = np.zeros_like(wm)
+    chars = []
+    for i in range(1, n):
+        cx, cy, cw, ch, a = st[i]
+        letter = 0.35 * h <= ch <= 1.05 * h and cw <= 1.1 * h
+        dot = ch < 0.3 * h and cw < 0.3 * h and a > 2 and cy > 0.45 * (y1 - y0)
+        if (letter or dot) and cx > 0 and cx + cw < box.shape[1] and cy > 0 and cy + ch < box.shape[0]:
+            keep[lab == i] = 1
+            chars.append((cx, cw, letter))
+    chars.sort()
+    if not any(c[2] for c in chars):
+        return "", None
+    # the number = the first group of letters (stop at a big gap)
+    first = next(k for k, c in enumerate(chars) if c[2])
+    end = chars[first][0] + chars[first][1]
+    for cx, cw, _ in chars[first + 1:]:
+        if cx - end > 0.6 * h:
+            break
+        end = max(end, cx + cw)
+    if not ocr:                                    # just where the number ends
+        return "", x0 + end
+    a = max(0, chars[first][0] - 4)
+    img = cv2.resize(255 - keep[:, a:end + 4] * 255, None, fx=2, fy=2,
+                     interpolation=cv2.INTER_NEAREST)
     img = cv2.copyMakeBorder(img, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
     t = pytesseract.image_to_string(img, config="--psm 7").strip()
-    t = re.sub(r"[^0-9A-Za-z.]", "", t).replace("H", "K").replace("k", "K")
-    return t
+    return re.sub(r"[^0-9A-Za-z.]", "", t).replace("H", "K").replace("k", "K"), x0 + end
+
+
+def read_chips(bgr):
+    """Just the chip count (one OCR call - cheap enough to run between fishing rows)."""
+    coin = _find_coin(bgr)
+    if not coin:
+        return None
+    x, y, w, h = coin
+    h = max(h, w)
+    _, end = _hud_number(bgr, x + w + 0.1 * h, x + 6.0 * h, y - 0.15 * h, y + 0.85 * h,
+                         0.75 * h, ocr=False)
+    if not end:                                    # can't place the chips number safely
+        return None
+    c0 = end + 0.75 * h
+    t, _ = _hud_number(bgr, c0, c0 + 2.6 * h, y - 0.12 * h, y + 0.5 * h, 0.4 * h)
+    return parse_amount(t) if re.fullmatch(r"\d+(\.\d+)?[KMBT]?", t) and len(t) >= 3 else None
 
 
 def read_hud(bgr):
-    """{'credits': value, 'chips': value} from the bottom-left HUD (either may be None)."""
-    H, W = bgr.shape[:2]
-    x1 = int(0.35 * W)
-    reg = bgr[int(0.70 * H):int(0.92 * H), :x1]
-    hsv = cv2.cvtColor(reg, cv2.COLOR_BGR2HSV)
-    n, _, st, _ = cv2.connectedComponentsWithStats(cv2.inRange(hsv, (12, 120, 150), (35, 255, 255)))
-    coins = [st[i] for i in range(1, n) if st[i][3] > 0.035 * H
-             and 0.7 < st[i][2] / st[i][3] < 1.4 and st[i][4] > 0.4 * st[i][2] * st[i][3]]
+    """{'credits': value, 'chips': value} from the bottom-left HUD (either may be None).
+    Positions are measured from the gold coin: the credits number sits right of it,
+    the chips number (smaller) right of the chip icon after it."""
     out = {"credits": None, "chips": None}
-    if not coins:
+    coin = _find_coin(bgr)
+    if not coin:
         return out
-    x, y, w, h, _ = min(coins, key=lambda c: c[1])
-    gap = int(0.12 * h)                         # start clear of the coin (its "7" can
-    txt = reg[max(0, y - int(0.15 * h)):y + int(0.85 * h), x + w + gap:x1]   # read as a digit)
-    wm, runs = _hud_runs(txt, h)
-    runs = [r for r in runs if max(c[3] for c in r) > 0.45 * h]
-    if runs:
-        t = _hud_ocr(wm, runs[0])
-        if re.search(r"[A-Za-z]$", t):
-            out["credits"] = parse_amount(t)
-        start = runs[0][-1][0] + runs[0][-1][2]
-    else:
-        start = 0
-    t2 = reg[max(0, y - int(0.15 * h)):y + int(0.55 * h), x + w + gap + start:x1]
-    wm2, r2 = _hud_runs(t2, 0.6 * h)
-    r2 = [r for r in r2 if len(r) >= 2]
-    if r2:
-        t = _hud_ocr(wm2, r2[0])
-        if re.fullmatch(r"\d+(\.\d+)?[KMBT]?", t):
-            out["chips"] = parse_amount(t)
+    x, y, w, h = coin
+    h = max(h, w)                                  # coin box can be clipped - use the bigger side
+    t, end = _hud_number(bgr, x + w + 0.1 * h, x + 6.0 * h, y - 0.15 * h, y + 0.85 * h, 0.75 * h)
+    t = re.sub(r"[O0]a$", "Qa", t)
+    if re.fullmatch(r"\d{1,3}\.\d{1,2}(K|M|B|T|Qa|Qi|Sx|Sp)", t):
+        out["credits"] = parse_amount(t)
+    # chips: after the chip icon that follows the credits number
+    if not end:
+        return out
+    c0 = end + 0.75 * h
+    t2, _ = _hud_number(bgr, c0, c0 + 2.6 * h, y - 0.12 * h, y + 0.5 * h, 0.4 * h)
+    if re.fullmatch(r"\d+(\.\d+)?[KMBT]?", t2):
+        out["chips"] = parse_amount(t2)
     return out
 
 
@@ -2329,73 +2374,98 @@ class _Steady:
         return self.value
 
 
+CHIP_CHECK_EVERY = 60    # seconds between chip checks while fishing
+KEYS_QUIET = 3           # only check when no keys have been on screen for this long
+
+
+def _chips_now(sct, prev):
+    """Two quick reads that must agree; a big jump (1.5x+) needs a third to agree too."""
+    a = read_chips(grab_screen(sct))
+    time.sleep(0.3)
+    b = read_chips(grab_screen(sct))
+    if a is None or b is None or abs(a - b) > 0.01 * max(a, b):
+        return None
+    if prev and (a > prev * 1.5 or a < prev / 1.5):
+        time.sleep(0.3)
+        c = read_chips(grab_screen(sct))
+        if c is None or abs(c - a) > 0.01 * a:
+            return None
+    return a
+
+
 def fish_tracker():
-    """Background thread: while Fishing runs, watch the chip and credit counters."""
+    """Background thread for fishing stats. Pressing keys always comes first: chips
+    are only read when no key row has been on screen for a few seconds, and at most
+    once a minute (plus once when a round ends)."""
     fr = state["fish_round"]
-    chips, creds = _Steady(), _Steady()
+    last_read, last_val = 0.0, None
     with mss.mss() as sct:
         while state["enabled"] and state["mode"] == "fishing" and not state["quit"]:
+            now = time.time()
+            since_keys = now - state.get("fish_last_prompt", 0)
             try:
-                hud = read_hud(grab_screen(sct))
-                c, k = chips.feed(hud["chips"]), creds.feed(hud["credits"])
-                now = time.time()
-                prompt = now - state.get("fish_last_prompt", 0) < 5
-                if fr["active"]:
-                    if c is not None:
-                        if fr["chips0"] is None:
-                            fr["chips0"] = c
-                        fr["chips"] = max(0, c - fr["chips0"])
-                    if k is not None:
-                        if fr["cred0"] is None:
-                            fr["cred0"] = k
-                        fr["credits"] = max(fr["credits"], k - fr["cred0"])
-                    if now - state.get("fish_last_prompt", 0) > ROUND_GAP:
+                if since_keys < KEYS_QUIET:                 # fishing right now
+                    if not fr["active"]:
+                        fr.update(active=True, chips0=last_val, chips=0, started=now)
+                else:
+                    round_over = fr["active"] and since_keys > ROUND_GAP
+                    every = CHIP_CHECK_EVERY if last_val is not None else 2   # need a start value
+                    if round_over or now - last_read >= every:
+                        v = _chips_now(sct, last_val)
+                        last_read = time.time()
+                        if v is not None:
+                            last_val = v
+                            if fr["active"]:
+                                if fr["chips0"] is None:
+                                    fr["chips0"] = v
+                                fr["chips"] = max(0, v - fr["chips0"])
+                    if round_over:
                         finish_round()
-                elif prompt:
-                    fr.update(active=True, chips0=c, cred0=k, chips=0, credits=0,
-                              started=now)
             except Exception as e:
                 print("Fishing stats error:", e)
-            time.sleep(2)
+            time.sleep(0.5)
     if fr["active"]:
         finish_round()
+
+
+_fish_cache = {"data": None}
+
+
+def load_fish_cached():
+    if _fish_cache["data"] is None:
+        _fish_cache["data"] = load_fish()
+    return _fish_cache["data"]
 
 
 def finish_round():
     fr = state["fish_round"]
     fr["active"] = False
-    if fr["chips"] <= 0 and fr["credits"] <= 0:
+    if fr["chips"] <= 0:
         return
     d = load_fish()
     d["rounds"] = d.get("rounds", 0) + 1
-    new_best = []
-    if fr["chips"] > d.get("best_chips", 0):
+    best = fr["chips"] > d.get("best_chips", 0)
+    if best:
         d["best_chips"] = fr["chips"]
-        new_best.append("chips")
-    if fr["credits"] > d.get("best_credits", 0):
-        d["best_credits"] = fr["credits"]
-        new_best.append("credits")
     save_fish(d)
-    fr["last"] = (fr["chips"], fr["credits"])
-    msg = f"Round done: +{format_amount(fr['chips'])} chips · +{format_amount(fr['credits'])} credits"
-    if new_best:
-        msg += "  ⭐ NEW BEST " + " & ".join(new_best).upper() + "!"
+    _fish_cache["data"] = d
+    fr["last"] = fr["chips"]
+    msg = f"Round done: +{format_amount(fr['chips'])} chips"
+    if best:
+        msg += "  \u2b50 NEW BEST!"
     notify(msg, 15)
 
 
 def fishing_stats_text():
-    fr, d = state["fish_round"], load_fish()
+    fr, d = state["fish_round"], load_fish_cached()
     if fr["active"]:
-        cur = (f"This round: +{format_amount(fr['chips'])} chips · "
-               f"+{format_amount(fr['credits'])} credits")
+        cur = (f"This round: +{format_amount(fr['chips']) if fr['chips'] else '0'} chips"
+               " (checked between rows)")
     elif fr.get("last"):
-        cur = (f"Last round: +{format_amount(fr['last'][0])} chips · "
-               f"+{format_amount(fr['last'][1])} credits")
+        cur = f"Last round: +{format_amount(fr['last'])} chips"
     else:
         cur = "This round: starts at the first PRESS TO FISH!"
-    best = (f"Best round: +{format_amount(d.get('best_chips', 0))} chips · "
-            f"+{format_amount(d.get('best_credits', 0))} credits")
-    return cur + "\n" + best
+    return cur + f"\nBest round: +{format_amount(d.get('best_chips', 0)) or '0'} chips"
 
 
 # ------------------------------------------------------------ auto clicker ---
@@ -2446,30 +2516,31 @@ def read_balance(bgr):
     return parse_amount(t) if re.search(r"[A-Za-z]$", t) else None
 
 
+def _confirmed(hist, raw, prev):
+    hist.append(raw)
+    del hist[:-3]
+
+    def close(a, b):                              # same number, allowing a little growth
+        return a is not None and b is not None and b > 0 and 0.87 <= a / b <= 1.15
+    if raw is None or len(hist) < 2 or not close(raw, hist[-2]):
+        return None
+    if prev and (raw > prev * 1.5 or raw < prev / 1.5):
+        if not (len(hist) == 3 and all(close(raw, h) for h in hist)):
+            return None
+    return raw
+
+
 def track_earnings(sct):
     """Sample the balance and keep a running credits-per-second estimate."""
     e = state["earn"]
     hud = read_hud(grab_screen(sct))
     now = time.time()
-    # credits: trust a number only once two reads agree, and a big jump (5x+) only
-    # once it has been seen 3 times in a row - a single misread like "71.23Qa" for
-    # "1.23Qa" must never be counted as money made
-    raw = hud["credits"]
-    hist = e.setdefault("cred_reads", [])
-    hist.append(raw)
-    del hist[:-3]
-    v = None
-    def close(a, b):                              # same number, allowing ~5s of growth
-        return a is not None and b is not None and 0.87 <= a / b <= 1.15
-    if raw is not None and len(hist) >= 2 and close(raw, hist[-2]):
-        v = raw
-        prev = e["prev"]
-        if prev and (v > prev * 5 or v < prev / 5):
-            if not (len(hist) == 3 and all(close(raw, h) for h in hist)):
-                v = None
-    # chips (Scrap Hit): count every increase once two reads agree; skip drops
-    c = e.setdefault("chips_steady", _Steady()).feed(hud["chips"])
-    if c is not None:
+    # Misreads (a dropped or extra digit, the coin's "7") must never count as money
+    # made: a number is trusted once two reads agree, and a big jump (over 1.5x
+    # up or down) only once it has been seen three times in a row.
+    v = _confirmed(e.setdefault("cred_reads", []), hud["credits"], e["prev"])
+    c = _confirmed(e.setdefault("chip_reads", []), hud["chips"], e.get("chips_prev"))
+    if c is not None:                             # chips (Scrap Hit): add increases only
         if e.get("chips_prev") is not None and c > e["chips_prev"]:
             e["chips_made"] = e.get("chips_made", 0) + c - e["chips_prev"]
         e["chips_prev"] = c
