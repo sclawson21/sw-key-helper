@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -1609,13 +1609,23 @@ def _ocr(img, psm=7, wl=None):
     return pytesseract.image_to_string(img, config=cfg_).upper()
 
 
+_LOOKALIKE = str.maketrans("0O1IL5S8B2Z6G", "OOIIISSBBZZGG")
+
+
+def _shape(t):
+    """Letters and digits that look alike in the game font count as the same
+    (R6 is often read as RG, B1 as 81, IG as 16...)."""
+    return t.translate(_LOOKALIKE)
+
+
 def _match_name(text, pool=None):
     toks = [_sq(t) for t in text.split() if _sq(t)]
     cands = toks + [a + b for a, b in zip(toks, toks[1:])] + ["".join(toks)]
     sc, name = 0, None
     for n in (pool or DROID_NAMES):
+        target = _sq(n)
         for t in cands:
-            q = _ratio(t, _sq(n))
+            q = max(_ratio(t, target), _ratio(_shape(t), _shape(target)) - 0.01)
             if q > sc:
                 sc, name = q, n
     return name, sc
