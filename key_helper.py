@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.4.0"
+VERSION = "1.4.2"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -2280,7 +2280,8 @@ def read_hud(bgr):
     if not coins:
         return out
     x, y, w, h, _ = min(coins, key=lambda c: c[1])
-    txt = reg[max(0, y - int(0.15 * h)):y + int(0.85 * h), x + w:x1]
+    gap = int(0.12 * h)                         # start clear of the coin (its "7" can
+    txt = reg[max(0, y - int(0.15 * h)):y + int(0.85 * h), x + w + gap:x1]   # read as a digit)
     wm, runs = _hud_runs(txt, h)
     runs = [r for r in runs if max(c[3] for c in r) > 0.45 * h]
     if runs:
@@ -2290,7 +2291,7 @@ def read_hud(bgr):
         start = runs[0][-1][0] + runs[0][-1][2]
     else:
         start = 0
-    t2 = reg[max(0, y - int(0.15 * h)):y + int(0.55 * h), x + w + start:x1]
+    t2 = reg[max(0, y - int(0.15 * h)):y + int(0.55 * h), x + w + gap + start:x1]
     wm2, r2 = _hud_runs(t2, 0.6 * h)
     r2 = [r for r in r2 if len(r) >= 2]
     if r2:
@@ -2448,8 +2449,30 @@ def read_balance(bgr):
 def track_earnings(sct):
     """Sample the balance and keep a running credits-per-second estimate."""
     e = state["earn"]
-    v = read_balance(grab_screen(sct))
+    hud = read_hud(grab_screen(sct))
     now = time.time()
+    # credits: trust a number only once two reads agree, and a big jump (5x+) only
+    # once it has been seen 3 times in a row - a single misread like "71.23Qa" for
+    # "1.23Qa" must never be counted as money made
+    raw = hud["credits"]
+    hist = e.setdefault("cred_reads", [])
+    hist.append(raw)
+    del hist[:-3]
+    v = None
+    def close(a, b):                              # same number, allowing ~5s of growth
+        return a is not None and b is not None and 0.87 <= a / b <= 1.15
+    if raw is not None and len(hist) >= 2 and close(raw, hist[-2]):
+        v = raw
+        prev = e["prev"]
+        if prev and (v > prev * 5 or v < prev / 5):
+            if not (len(hist) == 3 and all(close(raw, h) for h in hist)):
+                v = None
+    # chips (Scrap Hit): count every increase once two reads agree; skip drops
+    c = e.setdefault("chips_steady", _Steady()).feed(hud["chips"])
+    if c is not None:
+        if e.get("chips_prev") is not None and c > e["chips_prev"]:
+            e["chips_made"] = e.get("chips_made", 0) + c - e["chips_prev"]
+        e["chips_prev"] = c
     if v is None:
         return
     s = e["samples"]
@@ -2457,8 +2480,6 @@ def track_earnings(sct):
         last = s[-1][1]
         if v < last * 0.98:                       # spent credits - start measuring again
             s.clear()
-        elif v > last * 1.5 and now - s[-1][0] < 60:
-            return                                # misread - ignore
     # credits made while active: add every increase, skip drops (spending) and the
     # gap after a pause (so time spent paused isn't counted)
     if e["prev"] is not None and v > e["prev"]:
@@ -2484,7 +2505,49 @@ def earnings_text():
     nxt = ""
     if not e["text"].startswith("Measuring"):
         nxt = f" \u00b7 next update in {max(0, 60 - int(now - e['text_time']))}s"
-    return f"{e['text']}{nxt}\n{made}"
+    out = f"{e['text']}{nxt}\n{made}"
+    if cfg["clicker_kind"] == "scrap":
+        chips = e.get("chips_made", 0)
+        mins = state.get("active_secs", 0) / 60
+        rate = f" \u00b7 {chips / mins:,.0f}/min" if mins >= 1 else ""
+        out += f"\nChips: +{format_amount(chips) if chips else '0'}{rate}"
+        hist = load_scrap()
+        if hist["minutes"] >= 1:
+            out += (f" \u00b7 your average {hist['chips'] / hist['minutes']:,.0f}/min "
+                    f"({hist['sessions']} session{'s' if hist['sessions'] != 1 else ''})")
+    return out
+
+
+SCRAP_FILE = "scrap_stats.json"
+
+
+def load_scrap():
+    try:
+        with open(SCRAP_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"sessions": 0, "minutes": 0.0, "chips": 0.0, "history": []}
+
+
+def save_scrap_session():
+    """Add this Scrap Hit session to the all-time chips-per-minute data."""
+    e = state.get("earn") or {}
+    mins = state.get("active_secs", 0) / 60
+    chips = e.get("chips_made", 0)
+    if mins < 1:                                   # too short to mean anything
+        return
+    d = load_scrap()
+    d["sessions"] += 1
+    d["minutes"] += mins
+    d["chips"] += chips
+    d.setdefault("history", []).append({"t": int(time.time()), "minutes": round(mins, 1),
+                                        "chips": chips, "per_min": round(chips / mins, 1)})
+    d["history"] = d["history"][-200:]
+    try:
+        with open(SCRAP_FILE, "w") as f:
+            json.dump(d, f)
+    except Exception as ex:
+        print("Couldn't save scrap stats:", ex)
 
 
 def _estimate_text():
@@ -2508,6 +2571,14 @@ def fmt_duration(sec):
 
 def run_clicker():
     """Scrap Hit: left-click continuously. Potion Grab: press F every few seconds."""
+    try:
+        _run_clicker()
+    finally:
+        if cfg["clicker_kind"] == "scrap":
+            save_scrap_session()
+
+
+def _run_clicker():
     next_click = time.perf_counter()
     last_tick, next_sample = time.time(), 0.0
     sct = mss.mss()
