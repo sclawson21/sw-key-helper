@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.4.6"
+VERSION = "1.4.7"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -776,8 +776,14 @@ def find_menu(bgr, side=None):
     selects = [b for b in buttons if fuzzy_contains(b["text"], "SELECT", 0.75)]
     if selects:
         side = side or state.get("trait_side", "left")
-        pick = max if side == "right" else min
-        return "select", pick(selects, key=lambda b: b["x"])
+        # The two SELECT buttons sit either side of the screen's middle. While the menu
+        # pops in/out only one may be visible - so go by which half it's in, never by
+        # "the rightmost one we can see" (that picked the LEFT droid by mistake).
+        mid = bgr.shape[1] / 2
+        mine = [b for b in selects if (b["cx"] > mid) == (side == "right")]
+        if not mine:
+            return None                           # our droid's button isn't up yet
+        return "select", (max if side == "right" else min)(mine, key=lambda b: b["x"])
     return None
 
 
