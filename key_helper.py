@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.4.4"
+VERSION = "1.4.6"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -397,7 +397,7 @@ def on_key(key):
         inventory_hotkey("add")
     elif key == getattr(K, cfg["inv_remove_key"], None):
         inventory_hotkey("remove")
-    elif key == K.home:
+    elif key == K.home and not state["enabled"]:   # not while a mode is running
         state["select_area"] = True
     elif key == K.delete:
         state["snapshot"] = True
@@ -409,8 +409,17 @@ def on_key(key):
 # ---------------------------------------------------------- tile detection ---
 
 def get_search_area():
-    if cfg["search_area"]:
-        return cfg["search_area"]
+    a = cfg["search_area"]
+    if a:
+        m = screen()
+        # a box too small to hold a whole key row (e.g. from an accidental Home
+        # press) would make fishing see nothing - fall back to automatic
+        if a.get("width", 0) >= 0.2 * m["width"] and a.get("height", 0) >= 0.08 * m["height"]:
+            return a
+        print("Custom scan area too small - using automatic:", a)
+        cfg["search_area"] = None
+        save_config()
+        notify("Custom scan area was too small - switched back to automatic", 6)
     m = screen()
     return {"left": m["left"] + int(m["width"] * 0.15),
             "top": m["top"] + int(m["height"] * 0.10),
@@ -1593,9 +1602,10 @@ DROID_RAW = {
 }
 DROID_RARITY = {x[:x.rfind(" ")]: r for r, s in DROID_RAW.items() for x in s.split(",")}
 DROID_NAMES = list(DROID_RARITY)
-VARIANTS = ["DEFAULT", "GOLD", "DIAMOND", "RAINBOW", "BESKAR", "GALACTIC", "STELLAR", "KYBER"]
+VARIANTS = ["DEFAULT", "GOLD", "DIAMOND", "RAINBOW", "BESKAR", "GALACTIC", "STELLAR", "KYBER", "SCOURGE"]
 VARIANT_LABEL = {"DEFAULT": "Basic", "GOLD": "Gold", "DIAMOND": "Diamond", "RAINBOW": "Rainbow",
-                 "BESKAR": "Beskar", "GALACTIC": "Galactic", "STELLAR": "Stellar", "KYBER": "Kyber"}
+                 "BESKAR": "Beskar", "GALACTIC": "Galactic", "STELLAR": "Stellar", "KYBER": "Kyber",
+                 "SCOURGE": "Scourge"}
 RARITY_WORDS = ["COMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC", "ICONIC"]
 _UP = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _NAME_WL = _UP + "0123456789-"
@@ -1653,7 +1663,7 @@ def _color_masks(hsv):
 
 # which variants each text colour can mean
 _COLOR_VARS = {"white": ["DEFAULT", "KYBER"], "gray": ["BESKAR"], "yellow": ["STELLAR", "GOLD"],
-               "blue": ["DIAMOND"], "lavender": ["GALACTIC"], "red": ["RAINBOW"]}
+               "blue": ["DIAMOND"], "lavender": ["GALACTIC", "SCOURGE"], "red": ["RAINBOW"]}
 
 
 def _variant_from_line(line, h):
@@ -1923,7 +1933,10 @@ def _read_card(bgr, target=None):
             cx = (min(c[0] for c in r) + max(c[0] + c[2] for c in r)) / 2 / W
             cy = np.mean([c[1] + c[3] / 2 for c in r]) / H
             return abs(cx - target[0]) + abs(cy - target[1])
-        rows = sorted((r for r in rows if dist(r) < 0.15), key=dist)[:1]
+        # the held card is near the middle and has the biggest name letters on screen
+        # (where exactly depends on the camera, so only roughly near the target)
+        rows = sorted((r for r in rows if dist(r) < 0.45),
+                      key=lambda r: -float(np.median([c[3] for c in r])))[:3]
     for r in rows:
         cs = np.array([(c[0] + c[2] / 2, c[1] + c[3] / 2) for c in r])
         h = float(np.median([c[3] for c in r]))
@@ -1976,9 +1989,9 @@ def read_droid(bgr):
     r = _read_droid_screen(bgr)
     if r:
         return r
-    if holding_card(bgr):
-        return read_held_card(bgr)
-    return None
+    # the 'HELD ITEM' hint isn't always readable, so try the held card anyway -
+    # the confirm box shows what was read before anything is saved
+    return read_held_card(bgr)
 
 
 def read_held_card(bgr):
@@ -2061,6 +2074,8 @@ def change_inventory(name, variant, delta, kyber=None):
         else:
             key = next((k for k in KYBER_KEYS if entry.get(k, 0) > 0), None)
         label = variant_label(variant, key) + " "
+    elif variant not in VARIANT_KEY:
+        return f"The website has no {variant_label(variant)} tier yet - not saved."
     else:
         key, label = VARIANT_KEY[variant], variant_label(variant) + " "
     if delta < 0 and (not key or entry.get(key, 0) <= 0):
@@ -2189,8 +2204,8 @@ def inventory_hotkey(action):
                         got = _read_droid_screen(img)
                         if got:
                             reader = _read_droid_screen
-                        elif holding_card(img):
-                            reader = read_held_card
+                        else:                     # held blueprint card (with or
+                            reader = read_held_card   # without the HELD ITEM hint)
                             got = read_held_card(img)
                     else:
                         got = reader(img)
@@ -2768,8 +2783,8 @@ def select_area(root):
     def up(e):
         x0, x1 = sorted((drag["x"], e.x))
         y0, y1 = sorted((drag["y"], e.y))
-        if x1 - x0 < 20 or y1 - y0 < 20:
-            notify("Box too small - press Home to try again.")
+        if x1 - x0 < 0.2 * m["width"] or y1 - y0 < 0.08 * m["height"]:
+            notify("Box too small - it must fit a whole key row. Press Home to try again.")
         else:
             cfg["search_area"] = {"left": m["left"] + x0, "top": m["top"] + y0,
                                   "width": x1 - x0, "height": y1 - y0}
