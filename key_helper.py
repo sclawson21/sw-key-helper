@@ -69,7 +69,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.4.7"
+VERSION = "1.4.8"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -1434,6 +1434,20 @@ def stats_summary():
     return "\n".join(lines + [line2])
 
 
+def clear_hands(sct):
+    """Quick left click (only with no menu open) - a blueprint that dropped while
+    rolling ends up in your hands and blocks the scanner; the click puts it away."""
+    if not traits_active():
+        return
+    img = grab_screen(sct)
+    if find_menu(img, "left") or find_menu(img, "right"):
+        return                                    # a menu is open - never click into it
+    pydirectinput.mouseDown()
+    time.sleep(0.05)
+    pydirectinput.mouseUp()
+    time.sleep(0.25)
+
+
 def run_traits(sct):
     try:
         while traits_active():
@@ -1441,6 +1455,7 @@ def run_traits(sct):
             state["status"] = "Opening droid menu"
             found = None
             for _ in range(5):
+                clear_hands(sct)
                 press(cfg["interact_key"])
                 found = wait_for_menu(sct, "either", 2.5)
                 if found or not traits_active():
@@ -1568,13 +1583,16 @@ def run_traits(sct):
             end = time.time() + 3
             while time.time() < end and traits_active():
                 time.sleep(0.2)
-                if not find_menu(grab_screen(sct)):
+                img = grab_screen(sct)
+                if not (find_menu(img, "left") or find_menu(img, "right")):
                     started = True
                     break
             if not traits_active():
                 return
             if not started:
-                stop_traits("Roll didn't start - not enough credits?")
+                if next_droid(f"Roll didn't start on the {side} droid - not enough credits "
+                              f"({state['cost']})?"):
+                    continue
                 return
             state["rolls"] += 1
             state["inputs"] += 1
@@ -1586,6 +1604,7 @@ def run_traits(sct):
             state["status"] = f"Waiting for roll #{state['rolls']}"
             if not traits_wait(cfg["roll_wait"]):
                 return
+            clear_hands(sct)                      # round done - drop any new blueprint
     except pytesseract.TesseractNotFoundError:
         stop_traits("Tesseract not found - check tesseract_path in config.json")
     except Exception as e:
