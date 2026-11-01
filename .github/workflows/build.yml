@@ -1,7 +1,7 @@
-# Builds "SW Key Helper.exe" (with Tesseract inside) and publishes it as a release
+# Builds "Droid Tycoon Helper.exe" (with Tesseract inside) and publishes it as a release
 # whenever key_helper.py changes on GitHub. Raise VERSION in key_helper.py to
 # publish a new version - if the version already exists, nothing is published.
-name: Build and release SW Key Helper
+name: Build and release Droid Tycoon Helper
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
     paths:
       - "key_helper.py"
       - "app_window.html"
-      - "SW Key Helper.ico"
+      - "Droid Tycoon Helper.ico"
       - ".github/workflows/build.yml"
   workflow_dispatch:
 
@@ -62,7 +62,7 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: python -m pip install pyinstaller mss opencv-python numpy pytesseract pydirectinput pynput pystray pillow pywebview
 
-      - name: Build SW Key Helper.exe
+      - name: Build Droid Tycoon Helper.exe
         if: steps.check.outputs.exists == 'false'
         shell: pwsh
         run: |
@@ -71,14 +71,14 @@ jobs:
           if (-not $tess) { throw "Tesseract wasn't installed" }
           Write-Host "Packing Tesseract from $tess"
           python -m PyInstaller --noconfirm --onefile --noconsole --uac-admin `
-            --name "SW Key Helper" `
-            --icon "SW Key Helper.ico" `
+            --name "Droid Tycoon Helper" `
+            --icon "Droid Tycoon Helper.ico" `
             --hidden-import pynput.keyboard._win32 `
             --hidden-import pynput.mouse._win32 `
             --hidden-import pystray._win32 `
             --hidden-import clr `
             --collect-all webview `
-            --add-data "SW Key Helper.ico;." `
+            --add-data "Droid Tycoon Helper.ico;." `
             --add-data "app_window.html;." `
             --add-data "$tess;tesseract" `
             key_helper.py
@@ -90,6 +90,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${{ steps.ver.outputs.version }}"
-          gh release create "v$v" "dist/SW Key Helper.exe" \
-            --title "SW Key Helper v$v" \
-            --notes "SW Key Helper v$v - everyone's copy updates itself on next start."
+          gh release create "v$v" "dist/Droid Tycoon Helper.exe" \
+            --title "Droid Tycoon Helper v$v" \
+            --notes "Droid Tycoon Helper v$v - everyone's copy updates itself on next start."
