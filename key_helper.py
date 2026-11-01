@@ -1,5 +1,5 @@
 """
-SW Key Helper - two helpers for the Droid Tycoon map:
+Droid Tycoon Helper - two helpers for the Droid Tycoon map:
   Fishing  finds the yellow key tiles, reads them and presses them.
   Clicker  Scrap Hit keeps left-clicking, Potion Grab presses F every 2-20 seconds
            (only while Fortnite is in front).
@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.6.4"
+VERSION = "1.7.0"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -341,9 +341,9 @@ HOTKEY_ACTIONS = [            # (id, what it does) - keys live in cfg["hotkeys"]
     ("inv_remove", "Remove droid on screen from inventory"),
     ("area", "Draw the fishing scan area"),
     ("snapshot", "Save debug pictures"),
-    ("quit", "Quit SW Key Helper"),
+    ("quit", "Quit Droid Tycoon Helper"),
 ]
-APP_WINDOW_TITLE = "SW Key Helper"
+APP_WINDOW_TITLE = "Droid Tycoon Helper"
 _KEY_LABELS = {"page_up": "Page Up", "page_down": "Page Down", "esc": "Esc",
                "caps_lock": "Caps Lock", "num_lock": "Num Lock", "scroll_lock": "Scroll Lock",
                "print_screen": "Print Screen", "pause": "Pause", "menu": "Menu key"}
@@ -1304,18 +1304,18 @@ def sign_out(quiet=False):
         pass
     _account.update(uid=None, id_token=None, refresh=None)
     if not quiet:
-        notify("Signed out - SW Key Helper will close", 5)
+        notify("Signed out - Droid Tycoon Helper will close", 5)
 
 
 def login_window(message=""):
     """Small sign-in window. Returns True once signed in, False if closed."""
     win = tk.Tk()
-    win.title("SW Key Helper - Sign in")
+    win.title("Droid Tycoon Helper - Sign in")
     win.configure(bg=BG)
     win.resizable(False, False)
     win.attributes("-topmost", True)
     for folder in (getattr(sys, "_MEIPASS", BASE_DIR), BASE_DIR):
-        ico = os.path.join(folder, "SW Key Helper.ico")
+        ico = os.path.join(folder, "Droid Tycoon Helper.ico")
         if os.path.exists(ico):
             try:
                 win.iconbitmap(ico)
@@ -1324,7 +1324,7 @@ def login_window(message=""):
             break
     box = tk.Frame(win, bg=BG, padx=28, pady=22)
     box.pack()
-    tk.Label(box, text="SW KEY HELPER", bg=BG, fg=FG,
+    tk.Label(box, text="DROID TYCOON HELPER", bg=BG, fg=FG,
              font=("Segoe UI", 15, "bold")).pack(anchor="w")
     tk.Label(box, text="Sign in with your LMS Droid Tycoon login", bg=BG, fg=DIM,
              font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 14))
@@ -2974,7 +2974,7 @@ def run_windows():
     mini_dot = tk.Label(mini, bg=BG, fg=AMBER, font=("Segoe UI", 9, "bold"), text="\u25cf")
     mini_dot.pack(side="left")
     mini_text = tk.Label(mini, bg=BG, fg=DIM, font=("Segoe UI", 9),
-                         text=f"SW Key Helper v{VERSION} \u00b7 {hk_label('menu')} = menu")
+                         text=f"Droid Tycoon Helper v{VERSION} \u00b7 {hk_label('menu')} = menu")
     mini_text.pack(side="left", padx=(4, 0))
 
     make_click_through(root)
@@ -3040,7 +3040,7 @@ def run_windows():
             stats.config(text="")
             hints.config(text=f"Up/Down move \u00b7 Left/Right change \u00b7 {hk_label('menu')} start")
         elif state["menu_open"]:
-            title.config(text="SW KEY HELPER \u2013 CHOOSE MODE", fg=FG)
+            title.config(text="DROID TYCOON HELPER \u2013 CHOOSE MODE", fg=FG)
             rows = [("\u25b6 " if state["menu_choice"] == i else "    ") + n
                     for i, n in enumerate(MODE_NAMES)]
             reading.config(text=rows[0])
@@ -3049,11 +3049,11 @@ def run_windows():
             hints.config(text=f"Up/Down choose \u00b7 {hk_label('menu')} start")
         else:
             if state["error"]:
-                title.config(text="SW KEY HELPER \u2013 PROBLEM", fg=RED)
+                title.config(text="DROID TYCOON HELPER \u2013 PROBLEM", fg=RED)
             elif state["enabled"]:
                 title.config(text=f"{mode} \u2013 ACTIVE", fg=GREEN)
             else:
-                title.config(text="SW KEY HELPER \u2013 STOPPED", fg=AMBER)
+                title.config(text="DROID TYCOON HELPER \u2013 STOPPED", fg=AMBER)
             stats.config(fg=DIM, font=("Segoe UI", 10))
             if state["mode"] == "traits":
                 reading.config(text=f"Trait: {state['trait'] or DASH}")
@@ -3158,7 +3158,7 @@ def tray_message(msg):
     icon = state.get("tray")
     if icon is not None:
         try:
-            icon.notify(msg, "SW Key Helper")
+            icon.notify(msg, "Droid Tycoon Helper")
         except Exception:
             pass
 
@@ -3185,7 +3185,7 @@ def check_for_update(manual=False):
                 tray_message(f"You're on the latest version (v{VERSION}).")
             return
         if not getattr(sys, "frozen", False):
-            notify(f"Update {latest} is available - get the new SW Key Helper.exe")
+            notify(f"Update {latest} is available - get the new Droid Tycoon Helper.exe")
             return
         asset = next((a for a in release.get("assets", [])
                       if a["name"].lower().endswith(".exe")), None)
@@ -3247,7 +3247,7 @@ def install_update(exe, new_path, latest):
         bat = os.path.join(os.environ.get("TEMP", BASE_DIR), "sw_key_helper_update.bat")
         with open(bat, "w") as f:
             f.write(f"""@echo off
-rem SW Key Helper updater - waits for the app to close, swaps in the new version
+rem Droid Tycoon Helper updater - waits for the app to close, swaps in the new version
 :wait
 tasklist /FI "PID eq {os.getpid()}" | find "{os.getpid()}" >nul && (timeout /t 1 >nul & goto wait)
 set n=0
@@ -3291,7 +3291,7 @@ def cleanup_old_versions():
 def load_icon_image():
     from PIL import Image, ImageDraw
     for folder in (getattr(sys, "_MEIPASS", BASE_DIR), BASE_DIR):
-        path = os.path.join(folder, "SW Key Helper.ico")
+        path = os.path.join(folder, "Droid Tycoon Helper.ico")
         if os.path.exists(path):
             try:
                 return Image.open(path)
@@ -3387,7 +3387,7 @@ def start_tray():
         screen_items.append(pystray.MenuItem(label, pick_screen(str(i)),
                                              checked=screen_is(str(i)), radio=True))
     menu = pystray.Menu(
-        pystray.MenuItem(f"SW Key Helper v{VERSION}", None, enabled=False),
+        pystray.MenuItem(f"Droid Tycoon Helper v{VERSION}", None, enabled=False),
         pystray.MenuItem("Open app window", open_window),
         pystray.MenuItem("Screen", pystray.Menu(*screen_items)),
         *account_items,
@@ -3398,7 +3398,7 @@ def start_tray():
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", do_quit),
     )
-    icon = pystray.Icon("SW Key Helper", load_icon_image(), f"SW Key Helper v{VERSION}", menu)
+    icon = pystray.Icon("Droid Tycoon Helper", load_icon_image(), f"Droid Tycoon Helper v{VERSION}", menu)
     state["tray"] = icon
     try:
         icon.run()
@@ -3439,7 +3439,7 @@ def _panel_html():
             req = urllib.request.Request(url, headers={"User-Agent": "SW-Key-Helper"})
             with urllib.request.urlopen(req, timeout=15) as r:
                 html = r.read().decode("utf-8")
-            if "SW Key Helper" not in html:
+            if "Droid Tycoon Helper" not in html:
                 continue
             with open(cached, "w", encoding="utf-8") as f:
                 f.write(html)
@@ -4243,10 +4243,28 @@ def start_panel_server():
                                                 "player": cfg["inventory_player"]}))
                 except Exception as e:
                     self._send(200, json.dumps({"ok": False, "error": str(e)}))
+            elif path == "/logo.png":
+                try:
+                    import io
+                    from PIL import Image
+                    ico = os.path.join(getattr(sys, "_MEIPASS", BASE_DIR), "Droid Tycoon Helper.ico")
+                    if not os.path.exists(ico):
+                        ico = os.path.join(BASE_DIR, "Droid Tycoon Helper.ico")
+                    img = Image.open(ico)
+                    img.size = max(img.ico.sizes())
+                    buf = io.BytesIO()
+                    img.convert("RGBA").save(buf, "PNG")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Cache-Control", "max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(buf.getvalue())
+                except Exception:
+                    self._send(404, "{}")
             elif path == "/icon.ico":
                 try:
                     with open(os.path.join(getattr(sys, "_MEIPASS", BASE_DIR),
-                                           "SW Key Helper.ico"), "rb") as f:
+                                           "Droid Tycoon Helper.ico"), "rb") as f:
                         self._send(200, f.read(), "image/x-icon")
                 except OSError:
                     self._send(404, "{}")
@@ -4339,7 +4357,7 @@ def _open_in_browser(url):
 
 
 def run_window_process(url):
-    """'SW Key Helper.exe --window <address>': just the app window."""
+    """'Droid Tycoon Helper.exe --window <address>': just the app window."""
     data_dir = os.path.join(BASE_DIR, "app_data")
     try:
         import webview

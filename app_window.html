@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SW Key Helper</title>
+<title>Droid Tycoon Helper</title>
 <link rel="icon" href="/icon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oxanium:wght@500;700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
 <style>
-/* ===== SW Key Helper app: shell (sidebar, header) =====
+/* ===== Droid Tycoon Helper app: shell (sidebar, header) =====
    Colours and fonts are the LMS Droid Tycoon website's dark theme. */
 :root{
   --bg:#10151d; --panel:#18202b; --panel-2:#1e2835; --line:#2c3949; --line-2:#3a4a5e;
@@ -34,7 +34,8 @@ button{cursor:pointer}
 /* ---------- sidebar ---------- */
 .sb{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
 .sb-brand{display:flex;align-items:center;gap:10px;padding:16px 16px 12px}
-.sb-logo{width:34px;height:34px;border-radius:8px;background:var(--accent);display:grid;place-items:center;flex:none}
+.sb-logo{width:38px;height:38px;flex:none}
+.sb-logo img{width:100%;height:100%;display:block}
 .sb-logo svg{width:22px;height:22px}
 .sb-brand b{font-family:var(--display);font-size:1rem;letter-spacing:.06em;display:block;line-height:1.05}
 .sb-brand span{font-family:var(--display);font-size:.62rem;letter-spacing:.2em;color:var(--muted);text-transform:uppercase}
@@ -434,8 +435,8 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
 <div id="app">
   <aside class="sb" aria-label="Sections">
     <div class="sb-brand">
-      <div class="sb-logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#1a1006" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="9" width="14" height="11" rx="2"/><path d="M8 9V7a4 4 0 0 1 8 0v2"/><circle cx="12" cy="14.5" r="2"/><path d="M5 13H3M21 13h-2"/></svg></div>
-      <div><b>SW KEY HELPER</b><span>Droid Tycoon</span></div>
+      <div class="sb-logo" aria-hidden="true"><img src="/logo.png" alt=""></div>
+      <div><b>DROID TYCOON</b><span>Helper</span></div>
     </div>
     <nav class="sb-nav" id="nav">
       <div class="sb-h">Data</div>
@@ -629,7 +630,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
             </div>
             <div class="card">
               <h3>App</h3>
-              <label class="switch"><input type="checkbox" id="s-openwin"><span>Open this window when SW Key Helper starts<small>Otherwise open it from the tray icon.</small></span></label>
+              <label class="switch"><input type="checkbox" id="s-openwin"><span>Open this window when Droid Tycoon Helper starts<small>Otherwise open it from the tray icon.</small></span></label>
               <label class="switch"><input type="checkbox" id="s-auto"><span>Update automatically when the app starts</span></label>
               <div class="row"><button class="btn" id="s-check" type="button">Check for updates now</button><span class="note" id="s-tray"></span></div>
             </div>
@@ -649,7 +650,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
               <div class="row">
                 <button class="btn" id="s-folder" type="button">Open settings folder</button>
                 <button class="btn danger" id="s-signout" type="button">Sign out</button>
-                <button class="btn danger" id="s-quit" type="button">Quit SW Key Helper</button>
+                <button class="btn danger" id="s-quit" type="button">Quit Droid Tycoon Helper</button>
               </div>
             </div>
           </div>
@@ -659,7 +660,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
   </div>
 </div>
 <div class="toast" id="toast" role="status"></div>
-<div class="offline" id="offline"><div><h2>SW Key Helper isn't running</h2><p>This window closes on its own when the app quits. Start SW Key Helper again to use it.</p></div></div>
+<div class="offline" id="offline"><div><h2>Droid Tycoon Helper isn't running</h2><p>This window closes on its own when the app quits. Start Droid Tycoon Helper again to use it.</p></div></div>
 
 <script>
 /* ===== website pages (LMS Droid Tycoon tracker), saved through the app ===== */
@@ -1551,7 +1552,7 @@ function renderDex(){
 }
 </script>
 <script>
-/* ===== app shell: sidebar, systems pages, link to SW Key Helper ===== */
+/* ===== app shell: sidebar, systems pages, link to Droid Tycoon Helper ===== */
 (function(){
 "use strict";
 const $=id=>document.getElementById(id);
@@ -1588,11 +1589,11 @@ let toastT=null;
 function toast(text,ok){const t=$("toast");t.textContent=text;t.className="toast"+(ok?" ok":"");t.style.display="block";clearTimeout(toastT);toastT=setTimeout(()=>t.style.display="none",4000)}
 async function setting(key,value,id){
   if(id) touched[id]=Date.now();
-  try{const r=await api("/api/set",{key,value});if(!r.ok)toast(r.error||"Couldn't change that");else poll()}catch(e){toast("Couldn't reach SW Key Helper")}
+  try{const r=await api("/api/set",{key,value});if(!r.ok)toast(r.error||"Couldn't change that");else poll()}catch(e){toast("Couldn't reach Droid Tycoon Helper")}
 }
 async function action(name,extra){
   try{const r=await api("/api/action",Object.assign({action:name},extra||{}));if(!r.ok){toast(r.error||"That didn't work");return false}poll();return true}
-  catch(e){toast("Couldn't reach SW Key Helper");return false}
+  catch(e){toast("Couldn't reach Droid Tycoon Helper");return false}
 }
 const busy=id=>{const el=$(id);return el===document.activeElement&&el.tagName!=="BUTTON"||Date.now()-(touched[id]||0)<1500};
 function val(id,v){const el=$(id);if(!busy(id)&&String(el.value)!==String(v))el.value=v}
@@ -1607,7 +1608,7 @@ window.APP={
   post:(path,body)=>api(path,body),
   async loadPlayers(){
     let r;
-    try{r=await api("/api/players")}catch(e){setSave("Can't reach SW Key Helper");return false}
+    try{r=await api("/api/players")}catch(e){setSave("Can't reach Droid Tycoon Helper");return false}
     if(!r.ok){setSave("Couldn't load your data – "+(r.error||"check your internet"));return false}
     const next={};
     Object.entries(r.players).forEach(([id,d])=>{next[id]=dirty.has(id)&&players[id]?players[id]:normalize(d)});
@@ -1828,8 +1829,8 @@ document.addEventListener("keydown",e=>{if(S&&S.capture){e.preventDefault()}},tr
 $("s-check").addEventListener("click",()=>action("check_update").then(ok=>ok&&toast("Checking for updates…",true)));
 $("s-folder").addEventListener("click",()=>action("open_folder"));
 $("s-pics-reload").addEventListener("click",()=>action("reload_pictures").then(ok=>ok&&toast("Looking for pictures on the wiki…",true)));
-$("s-signout").addEventListener("click",()=>{if(confirm("Sign out? SW Key Helper will close and ask you to sign in next time."))action("sign_out")});
-$("s-quit").addEventListener("click",()=>{if(confirm("Quit SW Key Helper?"))action("quit")});
+$("s-signout").addEventListener("click",()=>{if(confirm("Sign out? Droid Tycoon Helper will close and ask you to sign in next time."))action("sign_out")});
+$("s-quit").addEventListener("click",()=>{if(confirm("Quit Droid Tycoon Helper?"))action("quit")});
 function renderSettings(){
   const s=S.settings;
   chk("s-openwin",s.open_window_on_start);chk("s-overlay",s.overlay);chk("s-hide",s.hide_when_paused);
