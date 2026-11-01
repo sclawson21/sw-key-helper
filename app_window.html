@@ -49,9 +49,9 @@ button{cursor:pointer}
 .sb-i .ct{margin-left:auto;font-family:var(--mono);font-size:.68rem;font-weight:500;color:var(--muted);letter-spacing:0}
 .sb-i .dot{margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px var(--good-soft);display:none}
 .sb-i.running .dot{display:block}
-.sb-foot{border-top:1px solid var(--line);padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px}
+.sb-foot{border-top:1px solid var(--line);padding:12px 12px 14px;display:flex;flex-direction:column;gap:14px}
 .sb-foot .sb-i{padding:6px 8px}
-.sb-f{display:flex;flex-direction:column;gap:3px}
+.sb-f{display:flex;flex-direction:column;gap:6px}
 .sb-f label,.sb-f .lbl{font-family:var(--display);font-size:.6rem;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
 .sb-f select{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 6px;font-size:.82rem;width:100%}
 .sb-sw{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.82rem;cursor:pointer}
@@ -82,6 +82,7 @@ button{cursor:pointer}
 .dimg{position:relative;display:inline-grid;place-items:center;width:52px;height:52px;flex:none;border-radius:8px;background:radial-gradient(circle at 50% 35%,#263243,#141b25);border:1px solid var(--line);overflow:hidden;vertical-align:middle}
 .dimg .ini{font-family:var(--display);font-weight:700;font-size:.72rem;color:var(--muted);letter-spacing:.02em;text-align:center;line-height:1;padding:2px}
 .dimg img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.dimg.ok .ini{display:none}
 .dimg.sm{width:40px;height:40px;border-radius:6px}
 .dimg.xs{width:30px;height:30px;border-radius:5px}
 .dimg.lg{width:100%;height:auto;aspect-ratio:1/1;border-radius:10px 10px 0 0;border:0;border-bottom:1px solid var(--line)}
@@ -126,6 +127,7 @@ button{cursor:pointer}
 .sys .seg.sm button{padding:3px 9px;font-size:.76rem}
 .sys .seg button[data-v="rainbow"][aria-pressed="true"]{background:linear-gradient(90deg,#ff8a8a,#ffd36b,#8ef08a,#7fc9ff,#c79bff);color:#1d1330}
 .sys .seg button[data-v="off"][aria-pressed="true"]{background:var(--line-2);color:var(--fg)}
+.sys .seg button[data-v="diamond"][aria-pressed="true"]{background:#7fd6f0;color:#06303d}
 .switch{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
 .switch input{appearance:none;width:34px;height:20px;border-radius:999px;background:var(--line-2);position:relative;flex:none;margin:0;cursor:pointer;transition:background .15s}
 .switch input::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--fg);transition:transform .15s}
@@ -424,7 +426,8 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
 #data .maxn.next{color:var(--fg)}
 #data .maxn.maxtier{color:var(--accent);font-weight:700}
 #ps-box .panel{margin-top:0!important}
-.sb-mods{font-size:.74rem;color:var(--muted);line-height:1.35;margin-top:-2px}
+.sb-mods{font-size:.76rem;color:var(--muted);line-height:1.4;margin-top:2px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.sb-mods:empty{display:none}
 .sb-mods b{color:var(--fg);font-family:var(--mono);font-weight:500}
 .sb-mods a{color:var(--accent);cursor:pointer;text-decoration:underline}
 #data .plist .pm{grid-column:3}
@@ -435,7 +438,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
 <div id="app">
   <aside class="sb" aria-label="Sections">
     <div class="sb-brand">
-      <div class="sb-logo" aria-hidden="true"><img src="/logo.png" alt=""></div>
+      <div class="sb-logo" aria-hidden="true"><img src="/logo.png" alt="" onerror="if(!this.dataset.f){this.dataset.f=1;this.src='/icon.ico'}"></div>
       <div><b>DROID TYCOON</b><span>Helper</span></div>
     </div>
     <nav class="sb-nav" id="nav">
@@ -444,7 +447,6 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
       <button class="sb-i" data-page="reb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>Rebirth<span class="ct" id="ct-reb"></span></button>
       <button class="sb-i" data-page="base"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V10l7-5 7 5v11"/><path d="M9 21v-6h6v6"/></svg>Base Profit</button>
       <button class="sb-i" data-page="fus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/></svg>Fusion<span class="ct" id="ct-fus"></span></button>
-      <button class="sb-i" data-page="sell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>Sell<span class="ct" id="ct-sell"></span></button>
       <button class="sb-i" data-page="chips"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>Chips</button>
       <button class="sb-i" data-page="sdex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg>Scourgedex<span class="ct" id="ct-sdex"></span></button>
       <button class="sb-i" data-page="dex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>Droidex</button>
@@ -536,7 +538,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
               <div class="card">
                 <h3>Options</h3>
                 <div class="field"><span class="lbl">Which droid</span>
-                  <div class="seg" id="t-droids"><button type="button" data-v="left">Left</button><button type="button" data-v="right">Right</button><button type="button" data-v="both">Both (left, then right)</button></div>
+                  <div class="seg" id="t-droids"><button type="button" data-v="left">Left</button><button type="button" data-v="right">Right</button><button type="button" data-v="both">Both (take turns)</button></div>
                 </div>
                 <div class="row">
                   <div class="field"><label for="t-maxcost">Move on / stop when a roll costs over</label><select id="t-maxcost"></select></div>
@@ -544,6 +546,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
                   <div class="field"><label for="t-maxrolls">Max rolls (0 = none)</label><input type="number" id="t-maxrolls" min="0" step="1"></div>
                 </div>
                 <label class="switch"><input type="checkbox" id="t-unread"><span>Stop if a trait can't be read and might be one I want</span></label>
+                <p class="note">With <b>Both</b>, the droids take turns: the second one is rolled while the first is still spinning, so it goes about twice as fast.</p>
                 <p class="note">Iconic droids are never rolled.</p>
               </div>
             </div>
@@ -1244,7 +1247,8 @@ function renderReb(p,done){
     <div class="bar" aria-hidden="true"><i style="width:${done.size/MAX*100}%"></i></div>
     <p class="note">Droids tick off automatically from your inventory when you own that variant or better.</p></div>
   <div class="rbar"><div class="seg" role="group" aria-label="View"><button data-act="rview" data-v="cards" aria-pressed="${rebView==="cards"}">Cards</button><button data-act="rview" data-v="list" aria-pressed="${rebView==="list"}">Droid list</button><button data-act="rview" data-v="table" aria-pressed="${rebView==="table"}">Rewards table</button></div><span class="fx">Cycle ${p.cycle} · Rebirth ${Math.max(0,...done)}</span></div>`;
-  {const pb=priorityBox(p,done),sb=doneSellBox(p,done);if(pb||sb)h+=`<div class="pgrid">${pb}${sb}</div>`;}
+  h+=`<label class="toggle" style="margin:-4px 0 2px"><input type="checkbox" id="hidePrio" ${hidePrio?"checked":""}> Hide the Priority and Sell lists</label>`;
+  if(!hidePrio){const pb=priorityBox(p,done),sb=doneSellBox(p,done);if(pb||sb)h+=`<div class="pgrid">${pb}${sb}</div>`;}
   if(rebView==="table") return h+rewardsTable(p,done,curL)+superPanel(p,done);
   if(rebView==="list") return h+droidListTable(p,done)+superPanel(p,done);
   h+=`<div class="list">`;
@@ -1518,7 +1522,7 @@ const setSaveOrig=setSave;
 /* picture of a droid at a variant key ("0".."6", "7n/7g/7b/7p", "8") */
 function dimg(name,key,size){
   const d=D[name]||{}, ini=String(name).replace(/[^A-Za-z0-9 -]/g,"").split(/[\s-]+/).map(w=>w.slice(0,3)).join(" ").slice(0,8);
-  return `<span class="dimg ${size||""} ${d.rarity||""}" aria-hidden="true"><span class="ini">${esc(ini)}</span><img src="/img?d=${encodeURIComponent(name)}&v=${encodeURIComponent(key)}&r=${APP.picVer}" alt="" loading="lazy" onerror="this.remove()"></span>`;
+  return `<span class="dimg ${size||""} ${d.rarity||""}" aria-hidden="true"><span class="ini">${esc(ini)}</span><img src="/img?d=${encodeURIComponent(name)}&v=${encodeURIComponent(key)}&r=${APP.picVer}" alt="" loading="lazy" onload="this.parentNode.classList.add('ok')" onerror="this.remove()"></span>`;
 }
 /* every later rebirth in this cycle that needs droid d again, e.g. "· Galactic - 30 · Kyber - 38" */
 function laterUses(p,d,L){
@@ -1528,6 +1532,19 @@ function laterUses(p,d,L){
   const top=Math.max(...later.map(x=>x.t));
   return `<span class="later"><span class="maxn">Later:</span>`+later.map((x,j)=>`<span class="maxn ${x.t===top?"maxtier":j===0?"next":""}">${TIERS[x.t]} - R${x.L}</span>`).join("")+`</span>`;
 }
+/* website redraws keep the page's and inner tables' scroll positions */
+const _render0=render;
+render=function(){
+  const sc=document.getElementById("scroll"), top=sc?sc.scrollTop:0;
+  const inner=[...document.querySelectorAll("#main .tbl-wrap")].map(e=>e.scrollTop);
+  _render0();
+  document.querySelectorAll("#main .tbl-wrap").forEach((e,i)=>{if(inner[i])e.scrollTop=inner[i]});
+  if(sc&&!render.toTop) sc.scrollTop=top;
+  render.toTop=false;
+};
+/* hide the Priority / Sell boxes on the Rebirth page */
+let hidePrio=(()=>{try{return localStorage.getItem("swkh-hidePrio")==="1"}catch(e){return false}})();
+document.addEventListener("change",e=>{if(e.target.id==="hidePrio"){hidePrio=e.target.checked;try{localStorage.setItem("swkh-hidePrio",hidePrio?"1":"0")}catch(_){}render()}});
 function bestKey(p,n){
   const inv=p.inv[n]||{}, ks=Object.keys(inv).filter(k=>inv[k]>0).sort((a,b)=>vt(b)-vt(a));
   return ks[0]||"0";
@@ -1563,7 +1580,6 @@ const PAGES={
   reb:["Rebirth Tracker","Your path, the droids each rebirth needs and its rewards.","data"],
   base:["Base Profit","The best droid for every slot, from what you own.","data"],
   fus:["Fusion","Recipes, what you can make now and what you've made.","data"],
-  sell:["Sell","Droids no rebirth left in this cycle still needs.","data"],
   chips:["Chip Upgrades","Chips for your next rebirth, and an upgrade calculator.","data"],
   sdex:["Scourgedex","Hand in one Scourge of every droid.","data"],
   dex:["Droidex","Every droid and variant, with pictures.","dex"],
@@ -1573,8 +1589,8 @@ const PAGES={
   scanner:["Droid Scanner","Add droids to your inventory straight from the game.","sys"],
   hotkeys:["Hotkeys","Change any hotkey on the fly.","sys"],
   settings:["Settings","Overlay, updates, pictures and account.","sys"]};
-const DATA_TAB={inv:"inv",reb:"reb",base:"base",fus:"fus",sell:"sell",chips:"chips",sdex:"inv"};
-let S=null, page=null, pickedMode="fishing", misses=0, lastDataVer=null, sentPlayer=null;
+const DATA_TAB={inv:"inv",reb:"reb",base:"base",fus:"fus",chips:"chips",sdex:"inv"};
+let S=null, page=null, pickedMode="fishing", misses=0, lastDataVer=null, sentPlayer=null, lastSig=null;
 const touched={};
 const store={get(k,d){try{const v=localStorage.getItem("swkh-"+k);return v===null?d:JSON.parse(v)}catch(e){return d}},
              set(k,v){try{localStorage.setItem("swkh-"+k,JSON.stringify(v))}catch(e){}}};
@@ -1610,6 +1626,9 @@ window.APP={
     let r;
     try{r=await api("/api/players")}catch(e){setSave("Can't reach Droid Tycoon Helper");return false}
     if(!r.ok){setSave("Couldn't load your data – "+(r.error||"check your internet"));return false}
+    const sig=JSON.stringify(r.players);
+    if(sig===lastSig&&mode==="cloud"){if(!dirty.size)setSave("All changes saved");return true}
+    lastSig=sig;
     const next={};
     Object.entries(r.players).forEach(([id,d])=>{next[id]=dirty.has(id)&&players[id]?players[id]:normalize(d)});
     dirty.forEach(id=>{if(players[id])next[id]=players[id]});
@@ -1635,7 +1654,7 @@ function show(pg){
     $("data").classList.add("on");
     tab=DATA_TAB[pg]; confirming=null;
     if(pg==="sdex") invView="sdex"; else if(pg==="inv"&&invView==="sdex") invView="cards";
-    render();
+    render.toTop=true; render();
   }else if(kind==="dex"){$("p-dex").classList.add("on");renderDex()}
   else{$("p-"+pg).classList.add("on");if(pg==="settings")renderSide()}
   if(MODE_NAMES[pg]) pickedMode=pg;
@@ -1661,19 +1680,18 @@ $("sb-mods").addEventListener("click",e=>{if(e.target.id==="sb-mods-set")show("s
 function refreshData(){
   renderPlayers(); renderCounts(); renderSide();
   if(page&&PAGES[page][2]==="data"){
-    const sc=$("scroll").scrollTop, f=document.activeElement&&document.activeElement.closest("#data");
-    if(!f){render();$("scroll").scrollTop=sc}
+    const f=document.activeElement&&document.activeElement.closest("#data");
+    if(!f) render();
   }
   if(page==="dex") renderDex();
 }
 function renderCounts(){
   const p=cur(); const set=(id,v)=>{const e=$(id);if(e.textContent!==String(v))e.textContent=v};
-  if(!p){["ct-inv","ct-reb","ct-fus","ct-sell","ct-sdex"].forEach(i=>set(i,""));return}
+  if(!p){["ct-inv","ct-reb","ct-fus","ct-sdex"].forEach(i=>set(i,""));return}
   try{
     set("ct-inv",Object.keys(p.inv).length||"");
     set("ct-reb",doneSet(p).size+"/40");
     set("ct-fus",FUSIONS.filter(f=>fusionState(p,f[1]).ok).length||"");
-    set("ct-sell",saleList(p).length||"");
     set("ct-sdex",(p.sdex||[]).length+"/90");
   }catch(e){}
 }
@@ -1748,8 +1766,9 @@ function buildTraits(){
   const t=S.traits,keys=Object.keys(t.wanted).join("|");
   if(keys===traitKeys)return;traitKeys=keys;
   $("t-list").innerHTML=Object.keys(t.wanted).map(n=>{const rb=t.always_rainbow.includes(n);
-    return `<div class="trow" data-n="${esc2(n)}"><span class="tn" title="${esc2(n)}">${esc2(n)}${rb?"<small>always rainbow</small>":""}</span>
-      <div class="seg sm" role="group" aria-label="${esc2(n)}"><button type="button" data-v="off">Off</button><button type="button" data-v="any">Any</button><button type="button" data-v="rainbow">Rainbow</button></div></div>`}).join("");
+    const opts=rb?[["off","Off"],["rainbow","Rainbow"]]:[["off","Off"],["any","Any"],["diamond","Diamond+"],["rainbow","Rainbow"]];
+    return `<div class="trow" data-n="${esc2(n)}" data-rb="${rb?1:0}"><span class="tn" title="${esc2(n)}">${esc2(n)}${rb?"<small>only comes in rainbow</small>":""}</span>
+      <div class="seg sm" role="group" aria-label="${esc2(n)}">${opts.map(([v,l])=>`<button type="button" data-v="${v}" title="${v==="diamond"?"Diamond or Rainbow":""}">${l}</button>`).join("")}</div></div>`}).join("");
   $("t-list").querySelectorAll(".trow").forEach(r=>{
     r.querySelector(".seg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
       touched["tw-"+r.dataset.n]=Date.now();r.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
@@ -1772,7 +1791,7 @@ function renderTraits(){
   if(!busy("t-droids"))seg("t-droids",t.droids);
   val("t-maxcost",t.max_cost);val("t-wait",t.roll_wait);val("t-maxrolls",t.max_rolls);chk("t-unread",t.stop_if_unreadable);
   let n=0;
-  $("t-list").querySelectorAll(".trow").forEach(r=>{const v=t.wanted[r.dataset.n]||"off";if(v!=="off")n++;
+  $("t-list").querySelectorAll(".trow").forEach(r=>{let v=t.wanted[r.dataset.n]||"off";if(r.dataset.rb==="1"&&v!=="off")v="rainbow";if(v!=="off")n++;
     if(Date.now()-(touched["tw-"+r.dataset.n]||0)<1500)return;
     r.classList.toggle("want",v!=="off");r.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.v===v)))});
   txt("t-sum",n?`${n} on`:"none on – pick at least one");

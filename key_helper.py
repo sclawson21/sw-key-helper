@@ -11,7 +11,7 @@ Hotkeys (work while the game is focused):
   Up / Down   pick Fishing or Traits while the menu is open
               (Traits then shows the trait list: Up/Down move, Left/Right sets
               Off / Any / Rainbow-only, Insert starts rolling)
-  Page Up     faster  (fishing: less delay between presses / clicker: more clicks)
+  Page Up     rebirth +1 on the website (Page Down = undo the last one)
   Page Down   slower
   F9 / F10    add / remove the droid on screen (droid screen or blueprint card) in
               your LMS Droid Tycoon inventory - press once to check, again to save
@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.7.2"
+VERSION = "1.8.1"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -121,7 +121,7 @@ DEFAULTS = {
     "inv_add_key": "f9",        # (older setting - the "hotkeys" list below is used now)
     "inv_remove_key": "f10",
     # --- Hotkeys (change them in the app window: Hotkeys tab) ---
-    "hotkeys": {"menu": "insert", "faster": "page_up", "slower": "page_down",
+    "hotkeys": {"menu": "insert", "reb_up": "page_up", "reb_down": "page_down",
                 "inv_add": "f9", "inv_remove": "f10", "area": "home",
                 "snapshot": "delete", "quit": "end"},
     # --- App window (website on top, controls below) ---
@@ -171,7 +171,11 @@ cfg = load_config()
 if cfg["allowed_keys"] == "EFZQ":  # older config files - the game added C
     cfg["allowed_keys"] = "EFZQC"
 _saved_hotkeys = cfg.get("hotkeys") if cfg.get("hotkeys") is not DEFAULTS["hotkeys"] else None
-cfg["hotkeys"] = {**DEFAULTS["hotkeys"], **(_saved_hotkeys or {})}
+_saved_hotkeys = dict(_saved_hotkeys or {})
+for _old, _new in (("faster", "reb_up"), ("slower", "reb_down")):     # renamed in 1.8
+    if _old in _saved_hotkeys:
+        _saved_hotkeys.setdefault(_new, _saved_hotkeys.pop(_old))
+cfg["hotkeys"] = {**DEFAULTS["hotkeys"], **_saved_hotkeys}
 if not _saved_hotkeys:                # older config: keep a changed F9/F10 setting
     cfg["hotkeys"]["inv_add"] = cfg.get("inv_add_key") or "f9"
     cfg["hotkeys"]["inv_remove"] = cfg.get("inv_remove_key") or "f10"
@@ -267,7 +271,7 @@ state = {
 }
 MODES = ["fishing", "traits", "clicker"]
 MODE_NAMES = ["Fishing", "Traits (droid scanner)", "Auto Clicker"]
-DROID_CHOICES = [("left", "Left droid"), ("right", "Right droid"), ("both", "Both (left, then right)")]
+DROID_CHOICES = [("left", "Left droid"), ("right", "Right droid"), ("both", "Both (take turns - faster)")]
 CLICKER_CHOICES = [("scrap", "Scrap Hit (keep left-clicking)"), ("potion", "Potion Grab (press F every few seconds)")]
 COST_STEPS = ["off", "1B", "10B", "100B", "1T", "10T", "50T", "100T", "500T", "600T", "700T",
               "800T", "900T", "1Qa", "2Qa", "3Qa", "4Qa", "5Qa"]   # 5Qa is the cap
@@ -299,7 +303,12 @@ TRAIT_NAMES = list(TRAIT_WORDS)
 # these only ever come in rainbow, so an unreadable non-rainbow trait can't be one
 ALWAYS_RAINBOW = {"Overclocked", "Chip Finder", "Passive Credits",
                   "Fusion Preservation", "Golden Splash Refill"}
-CHOICES = ["off", "any", "rainbow"]
+CHOICES = ["off", "any", "diamond", "rainbow"]    # diamond = Diamond or Rainbow
+
+
+def choices_for(name):
+    """Always-rainbow traits only make sense as Off / Rainbow."""
+    return ["off", "rainbow"] if name in ALWAYS_RAINBOW else CHOICES
 
 
 def notify(msg, seconds=2.5):
@@ -325,6 +334,7 @@ def start_mode():
     if state["mode"] == "traits":
         state["trait_queue"] = {"left": ["left"], "right": ["right"],
                                 "both": ["left", "right"]}.get(cfg["trait_droids"], ["left"])
+        state["trait_queue_all"] = list(state["trait_queue"])
         state["trait_side"] = state["trait_queue"].pop(0)
         state["side_checked"] = None
         state["trait_droid"] = ""
@@ -335,8 +345,8 @@ def start_mode():
 
 HOTKEY_ACTIONS = [            # (id, what it does) - keys live in cfg["hotkeys"]
     ("menu", "Open menu / start / stop"),
-    ("faster", "Faster (fishing delay, clicker speed)"),
-    ("slower", "Slower"),
+    ("reb_up", "Rebirth +1 (marks the next rebirth complete)"),
+    ("reb_down", "Rebirth \u22121 (undoes the last one)"),
     ("inv_add", "Add droid on screen to inventory"),
     ("inv_remove", "Remove droid on screen from inventory"),
     ("area", "Draw the fishing scan area"),
@@ -482,10 +492,12 @@ def on_key(key):
             cfg["max_cost"] = COST_STEPS[i]
         else:
             name = TRAIT_NAMES[state["pick_index"]]
+            opts = choices_for(name)
             cur = cfg["trait_wanted"].get(name, "off")
-            cfg["trait_wanted"][name] = CHOICES[(CHOICES.index(cur) + step) % len(CHOICES)]
-    elif act in ("faster", "slower"):
-        change_speed(1 if act == "faster" else -1)
+            cur = cur if cur in opts else ("rainbow" if cur != "off" else "off")
+            cfg["trait_wanted"][name] = opts[(opts.index(cur) + step) % len(opts)]
+    elif act in ("reb_up", "reb_down"):
+        rebirth_hotkey(1 if act == "reb_up" else -1)
     elif act == "inv_add":
         inventory_hotkey("add")
     elif act == "inv_remove":
@@ -497,6 +509,50 @@ def on_key(key):
     elif act == "quit":
         state["quit"] = True
         return False
+
+
+def rebirth_hotkey(step):
+    """Page Up / Page Down in the game: mark the next rebirth done, or undo the last."""
+    if not accounts_enabled() or not _account.get("refresh"):
+        notify("Sign in to change rebirths", 4)
+        return
+
+    def work():
+        try:
+            player = current_player()
+            if not player:
+                notify("No website player yet", 4)
+                return
+            url = _players_url(player["id"])
+            doc = _http(url, token=id_token())
+            fields = {k: _fs_value(v) for k, v in doc.get("fields", {}).items()}
+            cycle = str(fields.get("cycle") or 1)
+            done = fields.get("done") or {}
+            levels = sorted(set(int(x) for x in (done.get(cycle) or [])))
+            if step > 0:
+                nxt = next((n for n in range(1, 41) if n not in levels), None)
+                if nxt is None:
+                    notify(f"{player['name']}: all 40 rebirths are already done", 5)
+                    return
+                levels = sorted(levels + [nxt])
+                msg = f"\u2714 Rebirth {nxt} complete for {player['name']}"
+            else:
+                if not levels:
+                    notify(f"{player['name']}: no rebirths to undo", 4)
+                    return
+                last = levels.pop()
+                msg = f"Undid rebirth {last} for {player['name']}"
+            done[cycle] = levels
+            body = {"fields": {"done": _to_fs(done),
+                               "updatedAt": {"integerValue": str(int(time.time() * 1000))}}}
+            _http(url + "?updateMask.fieldPaths=done&updateMask.fieldPaths=updatedAt", body,
+                  token=id_token(), method="PATCH")
+            state["data_version"] = state.get("data_version", 0) + 1
+            top = max(levels) if levels else 0
+            notify(f"{msg} \u00b7 now at rebirth {top} (cycle {cycle})", 6)
+        except Exception as e:
+            notify(f"Couldn't change the rebirth: {e}"[:120], 6)
+    threading.Thread(target=work, daemon=True).start()
 
 
 def change_speed(step):
@@ -1003,23 +1059,27 @@ def identify_trait(texts):
     return ""
 
 
-def is_wanted(name, rainbow):
+def is_wanted(name, tier):
+    """tier: 'default' / 'gold' / 'diamond' / 'rainbow' ('' if unknown)."""
     choice = cfg["trait_wanted"].get(name, "off")
-    return choice == "any" or (choice == "rainbow" and rainbow)
+    return (choice == "any" or (choice == "rainbow" and tier == "rainbow")
+            or (choice == "diamond" and tier in ("diamond", "rainbow")))
 
 
-def could_be_wanted(rainbow):
+def could_be_wanted(tier):
     """For a trait we couldn't read: might it be one we want?"""
     for name, choice in cfg["trait_wanted"].items():
-        if choice == "rainbow" and rainbow:
+        if choice in ("rainbow", "diamond") and tier == "rainbow":
             return True
-        if choice == "any" and (rainbow or name not in ALWAYS_RAINBOW):
+        if choice == "diamond" and tier == "diamond" and name not in ALWAYS_RAINBOW:
+            return True
+        if choice == "any" and (tier == "rainbow" or name not in ALWAYS_RAINBOW):
             return True
     return False
 
 
 def wanted_summary():
-    parts = [f"{n} ({'rainbow' if c == 'rainbow' else 'any'})"
+    parts = [f"{n} ({c if c in ('rainbow', 'diamond') else 'any'})"
              for n, c in cfg["trait_wanted"].items() if c != "off"]
     return ", ".join(parts) or "nothing"
 
@@ -1524,7 +1584,7 @@ def stats_summary():
     # use whichever has more data for the "wanted" estimate
     tally = everyone if sum(everyone.values()) >= sum(mine.values()) else mine
     n = sum(tally.values())
-    hits = sum(c for (trait, tier), c in tally.items() if is_wanted(trait, tier == "rainbow"))
+    hits = sum(c for (trait, tier), c in tally.items() if is_wanted(trait, tier))
     times = state["roll_times"]
     gaps = sorted(b - a for a, b in zip(times, times[1:]) if 0 < b - a < 60)
     per_roll = gaps[len(gaps) // 2] if gaps else None
@@ -1556,17 +1616,52 @@ def clear_hands(sct):
 
 
 def run_traits(sct):
+    """Roll traits at the scanner. With "Both", the two droids take turns: right after
+    one droid's roll starts, the other one is rolled while the first is still
+    animating - nearly twice as many rolls per minute."""
+    sides = list(state["trait_queue_all"])
+    info = {sd: {"last_roll": 0.0, "pending": None, "checked": False, "droid": "",
+                 "last_cost": None, "rolls": 0} for sd in sides}
+    results = []
+    turn = 0
+
+    def finish(side, msg):
+        """This droid is done. Returns True if another droid is still rolling."""
+        results.append(msg)
+        if side in sides:
+            sides.remove(side)
+        if not sides:
+            stop_traits("  ".join(results))
+            return False
+        pydirectinput.press("esc")                # close this droid's panel
+        time.sleep(0.6)
+        notify(f"{msg}  Still rolling the {sides[0]} droid.", 10)
+        return True
+
     try:
-        while traits_active():
-            # 1. Press F at the scanner (retry - the last roll may still be animating)
+        while traits_active() and sides:
+            side = sides[turn % len(sides)]
+            turn += 1
+            st = info[side]
+            state["trait_side"], state["trait_droid"] = side, st["droid"]
+            state["last_cost"] = st["last_cost"]
+            # wait until this droid's previous roll has finished animating
+            left_to_wait = cfg["roll_wait"] - (time.time() - st["last_roll"])
+            if left_to_wait > 0:
+                state["status"] = f"Waiting for the {side} droid's roll"
+                if not traits_wait(left_to_wait):
+                    return
+            clear_hands(sct)
+
+            # 1. Press F at the scanner (retry - a roll may still be animating)
             state["status"] = "Opening droid menu"
             found = None
             for _ in range(5):
-                clear_hands(sct)
                 press(cfg["interact_key"])
                 found = wait_for_menu(sct, "either", 2.5)
                 if found or not traits_active():
                     break
+                clear_hands(sct)
             if not traits_active():
                 return
             if not found:
@@ -1574,17 +1669,18 @@ def run_traits(sct):
                 return
 
             # 2. Pick the droid (left or right) - never an Iconic one
-            side = state["trait_side"]
-            if found[0] != "select" and state["side_checked"] != side:
+            if found[0] != "select" and not st["checked"]:
                 stop_traits("Couldn't see the Select Droid screen to check the droid's "
                             "rarity - stopped to be safe")
                 return
             if found[0] == "select":
                 state["status"] = f"Selecting {side} droid"
-                if not traits_wait(0.4):          # let the menu finish its pop-in
+                if not traits_wait(0.3):          # let the menu finish its pop-in
                     return
-                settled = wait_for_menu(sct, "select", 1.5) or found
-                if state["side_checked"] != side:
+                settled = wait_for_menu(sct, "select", 1.5, side) or found
+                if settled[0] != "select":
+                    settled = found
+                if not st["checked"]:
                     verdict, dname = droid_card_check(grab_screen(sct), settled[1])
                     if verdict == "iconic":
                         stop_traits(f"The {side} droid is Iconic ({dname or 'Iconic'}) - "
@@ -1594,12 +1690,12 @@ def run_traits(sct):
                         stop_traits(f"Couldn't tell if the {side} droid is Iconic - "
                                     "stopped to be safe")
                         return
-                    state["side_checked"] = side
+                    st["checked"], st["droid"] = True, dname
                     state["trait_droid"] = dname
                 click_at(settled[1]["cx"], settled[1]["cy"])
                 found = wait_for_menu(sct, "panel", 3)
                 if not found and traits_active():
-                    sel = wait_for_menu(sct, "select", 0.5)
+                    sel = wait_for_menu(sct, "select", 0.5, side)
                     if sel:
                         click_at(sel[1]["cx"], sel[1]["cy"])
                     found = wait_for_menu(sct, "panel", 3)
@@ -1610,8 +1706,8 @@ def run_traits(sct):
                     return
 
             # 3. Read the droid's current trait BEFORE spending anything
-            state["status"] = "Reading trait"
-            if not traits_wait(0.5):              # let the panel finish sliding in
+            state["status"] = f"Reading the {side} droid's trait"
+            if not traits_wait(0.4):              # let the panel finish sliding in
                 return
             texts, tier_name, name = [], "", ""
             for _ in range(5):                    # a few tries if the text is hard to read
@@ -1624,31 +1720,30 @@ def run_traits(sct):
                 name = identify_trait(texts)
                 if name or not traits_active():
                     break
-                time.sleep(0.3)
-            rainbow = tier_name == "rainbow"
-            if state["pending_roll"] is not None:   # this is the result of our last roll
-                record_roll(name or "?", tier_name, state["pending_roll"])
-                state["pending_roll"] = None
+                time.sleep(0.25)
+            if st["pending"] is not None:          # the result of this droid's last roll
+                record_roll(name or "?", tier_name, st["pending"])
+                st["pending"] = None
             tier = f" ({tier_name})" if tier_name and tier_name != "default" else ""
             state["trait"] = (name + tier) if name else (
                 (max(texts, key=len)[:30] + tier) if any(texts) else "(none yet)")
-            if name and is_wanted(name, rainbow):
-                if next_droid(f"GOT {name.upper()}{tier.upper()} on the {side} droid "
-                              f"after {state['rolls']} rolls!"):
+            if name and is_wanted(name, tier_name):
+                if finish(side, f"GOT {name.upper()}{tier.upper()} on the {side} droid "
+                                f"after {st['rolls']} rolls!"):
                     continue
                 return
             if not name and not tier_name:      # grey "?" - this droid has no trait yet
                 state["trait"] = "(no trait yet)"
-            elif not name and cfg["stop_if_unreadable"] and could_be_wanted(rainbow):
-                stop_traits("Couldn't read this trait and it might be one you want - "
-                            "stopped to be safe. Check it!")
+            elif not name and cfg["stop_if_unreadable"] and could_be_wanted(tier_name):
+                stop_traits(f"Couldn't read the {side} droid's trait and it might be one you "
+                            "want - stopped to be safe. Check it!")
                 return
-            if cfg["max_rolls"] and state["rolls"] >= cfg["max_rolls"]:
-                if next_droid(f"Reached max_rolls ({cfg['max_rolls']})."):
+            if cfg["max_rolls"] and st["rolls"] >= cfg["max_rolls"]:
+                if finish(side, f"Reached max_rolls ({cfg['max_rolls']}) on the {side} droid."):
                     continue
                 return
 
-            # 4. Click the credit button and make sure the roll started
+            # 4. Check the price, click the credit button and make sure the roll started
             panel = wait_for_menu(sct, "panel", 1.5)
             if not panel:
                 stop_traits("Lost the trait panel before rolling")
@@ -1660,12 +1755,10 @@ def run_traits(sct):
                     break
                 time.sleep(0.2)
             state["cost"] = format_amount(cost) if cost is not None else "?"
-            if cost is not None:
-                state["last_cost"] = cost
             limit = parse_amount(cfg["max_cost"] if "." in cfg["max_cost"] else
                                  re.sub(r"^(\d+)", r"\1.00", cfg["max_cost"]))
             if cfg["max_cost"] != "off" and limit:
-                last = state.get("last_cost")
+                last = st["last_cost"]
                 if cost is None and not (last and last * 3 < limit):
                     stop_traits("Couldn't read the roll cost - stopped because the cost "
                                 "limit is on")
@@ -1678,18 +1771,19 @@ def run_traits(sct):
                         if good:
                             cost = good[0]
                             state["cost"] = format_amount(cost)
-                            state["last_cost"] = cost
                 if cost is not None and cost > limit:
-                    if next_droid(f"Next roll on the {side} droid costs {format_amount(cost)} - "
-                                  f"over your {cfg['max_cost']} limit."):
+                    if finish(side, f"Next roll on the {side} droid costs {format_amount(cost)} - "
+                                    f"over your {cfg['max_cost']} limit."):
                         continue
                     return
-            state["status"] = f"Rolling (#{state['rolls'] + 1}) \u00b7 {state['cost']}"
+            if cost is not None:
+                st["last_cost"] = state["last_cost"] = cost
+            state["status"] = f"Rolling the {side} droid (#{state['rolls'] + 1}) \u00b7 {state['cost']}"
             click_at(panel[1]["cx"], panel[1]["cy"])
             started = False
             end = time.time() + 3
             while time.time() < end and traits_active():
-                time.sleep(0.2)
+                time.sleep(0.15)
                 img = grab_screen(sct)
                 if not (find_menu(img, "left") or find_menu(img, "right")):
                     started = True
@@ -1697,26 +1791,23 @@ def run_traits(sct):
             if not traits_active():
                 return
             if not started:
-                if next_droid(f"Roll didn't start on the {side} droid - not enough credits "
-                              f"({state['cost']})?"):
+                if finish(side, f"Roll didn't start on the {side} droid - not enough credits "
+                                f"({state['cost']})?"):
                     continue
                 return
+            st["last_roll"] = time.time()
+            st["rolls"] += 1
+            st["pending"] = cost
             state["rolls"] += 1
             state["inputs"] += 1
             state["pending_roll"] = cost
             state["spent"] += cost or 0
             state["roll_times"] = (state["roll_times"] + [time.time()])[-50:]
-
-            # 5. Wait for the roll animation, then go again
-            state["status"] = f"Waiting for roll #{state['rolls']}"
-            if not traits_wait(cfg["roll_wait"]):
-                return
-            clear_hands(sct)                      # round done - drop any new blueprint
+            # 5. straight on to the other droid (or, with one droid, wait for this roll)
     except pytesseract.TesseractNotFoundError:
         stop_traits("Tesseract not found - check tesseract_path in config.json")
     except Exception as e:
         stop_traits(f"Traits error: {e}")
-
 
 
 # ----------------------------------------------------------- droid reader ---
@@ -3023,7 +3114,7 @@ def run_windows():
             hints.config(text=f"Up/Down choose \u00b7 {hk_label('menu')} next")
         elif picking:
             title.config(text="TRAITS \u2013 STOP ON WHICH?", fg=FG)
-            badge = {"off": "  \u00b7  ", "any": " ANY ", "rainbow": "RAINBOW"}
+            badge = {"off": "  \u00b7  ", "any": " ANY ", "diamond": "DIAMOND", "rainbow": "RAINBOW"}
             lines = []
             for i, n in enumerate(TRAIT_NAMES):
                 mark = "\u25b6" if i == state["pick_index"] else " "
@@ -3087,7 +3178,7 @@ def run_windows():
                                   f"Delay {int(cfg['press_delay'] * 1000)} ms \u00b7 "
                                   f"Inputs {state['inputs']} \u00b7 Area {area}", wraplength=440)
             hints.config(text=f"{hk_label('menu')} menu/start/stop \u00b7 "
-                              f"{hk_label('faster')}/{hk_label('slower')} faster/slower\n"
+                              f"{hk_label('reb_up')}/{hk_label('reb_down')} rebirth +/\u2212\n"
                               f"{hk_label('inv_add')}/{hk_label('inv_remove')} add/remove droid "
                               f"\u00b7 {hk_label('area')} set area \u00b7 {hk_label('quit')} quit")
         message.config(text=state["error"] or state["message"],
@@ -3661,7 +3752,7 @@ def panel_set(key, value):
         if not isinstance(value, dict):
             return "bad value"
         for n, c in value.items():
-            if n in TRAIT_NAMES and c in CHOICES:
+            if n in TRAIT_NAMES and c in choices_for(n):
                 cfg["trait_wanted"][n] = c
     elif key == "trait_droids":
         if value not in [c[0] for c in DROID_CHOICES]:
@@ -4191,16 +4282,45 @@ def build_picture_index(force=False):
     state["data_version"] = state.get("data_version", 0) + 1     # let the window redraw
 
 
+_custom = {"t": 0.0, "map": {}}
+
+
+def custom_picture(name, key):
+    """Your own pictures: put files like "Gonk.png" or "BU-4D Gold.png" in
+    droid_pictures/custom and they're used before the wiki's."""
+    folder = os.path.join(PIC_DIR, "custom")
+    if time.time() - _custom["t"] > 10:
+        _custom["t"] = time.time()
+        found = {}
+        try:
+            os.makedirs(folder, exist_ok=True)
+            names = list(DROID_RARITY) + list(PIC_ALIASES)
+            for f in os.listdir(folder):
+                if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    m = match_picture(f, names)
+                    if m:
+                        found[f"{m[0]}|{m[1]}"] = os.path.join(folder, f)
+        except OSError:
+            pass
+        _custom["map"] = found
+    m = _custom["map"]
+    return m.get(f"{name}|{key}") or (m.get(f"{name}|7") if key.startswith("7") else None) \
+        or m.get(f"{name}|0")
+
+
 def picture_file(name, key):
     """Local file for a droid picture (downloaded on first use), or None."""
-    idx = _pics["index"]
-    if not idx:
-        return None
+    own = custom_picture(name, key)
+    if own:
+        return own
+    idx = _pics["index"] or {}
     tries = [key]
     if key.startswith("7") and len(key) == 2:
         tries += ["7", "7n", "7g"]                   # any Kyber picture beats none
     elif key == "7":
         tries += ["7n", "7g", "7b", "7p"]
+    if "0" not in tries:
+        tries.append("0")                            # no picture of that variant: use Default
     url = None
     for k in tries:
         url = idx.get(f"{name}|{k}")
