@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.7.0"
+VERSION = "1.7.2"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -1314,14 +1314,12 @@ def login_window(message=""):
     win.configure(bg=BG)
     win.resizable(False, False)
     win.attributes("-topmost", True)
-    for folder in (getattr(sys, "_MEIPASS", BASE_DIR), BASE_DIR):
-        ico = os.path.join(folder, "Droid Tycoon Helper.ico")
-        if os.path.exists(ico):
-            try:
-                win.iconbitmap(ico)
-            except Exception:
-                pass
-            break
+    ico = icon_path()
+    if ico:
+        try:
+            win.iconbitmap(ico)
+        except Exception:
+            pass
     box = tk.Frame(win, bg=BG, padx=28, pady=22)
     box.pack()
     tk.Label(box, text="DROID TYCOON HELPER", bg=BG, fg=FG,
@@ -3288,15 +3286,55 @@ def cleanup_old_versions():
 
 # --------------------------------------------------------------- tray icon ---
 
-def load_icon_image():
-    from PIL import Image, ImageDraw
+def icon_path():
+    """The app icon file: inside the .exe, next to it, or downloaded once from GitHub."""
     for folder in (getattr(sys, "_MEIPASS", BASE_DIR), BASE_DIR):
         path = os.path.join(folder, "Droid Tycoon Helper.ico")
-        if os.path.exists(path):
-            try:
-                return Image.open(path)
-            except Exception:
-                pass
+        if os.path.exists(path) and os.path.getsize(path) > 100:
+            return path
+    path = os.path.join(BASE_DIR, "Droid Tycoon Helper.ico")
+    try:
+        import urllib.request
+        url = f"https://raw.githubusercontent.com/{UPDATE_REPO}/main/Droid%20Tycoon%20Helper.ico"
+        with urllib.request.urlopen(urllib.request.Request(
+                url, headers={"User-Agent": "SW-Key-Helper"}), timeout=10) as r:
+            data = r.read()
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+    except Exception as e:
+        print("No icon file:", e)
+        return None
+
+
+def icon_png(size=256):
+    """The icon as PNG bytes (largest picture in the .ico)."""
+    import io
+    from PIL import Image
+    path = icon_path()
+    if not path:
+        return None
+    img = Image.open(path)
+    try:
+        sizes = sorted(img.ico.sizes())
+        pick = min((s for s in sizes if s[0] >= size), default=sizes[-1])
+        img = img.ico.getimage(pick)
+    except Exception:
+        img.load()
+    buf = io.BytesIO()
+    img.convert("RGBA").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def load_icon_image():
+    from PIL import Image, ImageDraw
+    path = icon_path()
+    if path:
+        try:
+            import io
+            return Image.open(io.BytesIO(icon_png(64)))
+        except Exception as e:
+            print("Icon didn't load:", e)
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))          # simple fallback
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((4, 4, 60, 60), radius=12, fill=(52, 60, 78, 255))
@@ -4245,28 +4283,24 @@ def start_panel_server():
                     self._send(200, json.dumps({"ok": False, "error": str(e)}))
             elif path == "/logo.png":
                 try:
-                    import io
-                    from PIL import Image
-                    ico = os.path.join(getattr(sys, "_MEIPASS", BASE_DIR), "Droid Tycoon Helper.ico")
-                    if not os.path.exists(ico):
-                        ico = os.path.join(BASE_DIR, "Droid Tycoon Helper.ico")
-                    img = Image.open(ico)
-                    img.size = max(img.ico.sizes())
-                    buf = io.BytesIO()
-                    img.convert("RGBA").save(buf, "PNG")
+                    data = icon_png(256)
+                except Exception as e:
+                    print("Logo failed:", e)
+                    data = None
+                if data:
                     self.send_response(200)
                     self.send_header("Content-Type", "image/png")
                     self.send_header("Cache-Control", "max-age=86400")
+                    self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
-                    self.wfile.write(buf.getvalue())
-                except Exception:
+                    self.wfile.write(data)
+                else:
                     self._send(404, "{}")
             elif path == "/icon.ico":
                 try:
-                    with open(os.path.join(getattr(sys, "_MEIPASS", BASE_DIR),
-                                           "Droid Tycoon Helper.ico"), "rb") as f:
+                    with open(icon_path(), "rb") as f:
                         self._send(200, f.read(), "image/x-icon")
-                except OSError:
+                except (OSError, TypeError):
                     self._send(404, "{}")
             else:
                 self._send(404 if path != "/api/state" else 403, "{}")
@@ -4359,6 +4393,7 @@ def _open_in_browser(url):
 def run_window_process(url):
     """'Droid Tycoon Helper.exe --window <address>': just the app window."""
     data_dir = os.path.join(BASE_DIR, "app_data")
+    set_app_id()
     try:
         import webview
     except Exception as e:
@@ -4390,9 +4425,50 @@ def run_window_process(url):
         _open_in_browser(url)
 
 
+APP_EXE = "Droid Tycoon Helper.exe"
+
+
+def move_to_new_name():
+    """The app used to be "SW Key Helper.exe". Updates keep the old file name, and
+    Windows keeps showing the old icon for it - so copy ourselves to the new name
+    once and start that. The old file then just opens the new one."""
+    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+        return False
+    cur = os.path.abspath(sys.executable)
+    if os.path.basename(cur).lower() != "sw key helper.exe":
+        return False
+    want = os.path.join(os.path.dirname(cur), APP_EXE)
+    try:
+        if not os.path.exists(want) or version_tuple(VERSION) > version_tuple(
+                open(want + ".version").read() if os.path.exists(want + ".version") else "0"):
+            import shutil
+            shutil.copy2(cur, want)
+            with open(want + ".version", "w") as f:
+                f.write(VERSION)
+    except OSError as e:
+        print("Couldn't make", APP_EXE, "-", e)
+        return False
+    print("Starting", want)
+    state["restart_path"] = want
+    restart_new_version()
+    return True
+
+
+def set_app_id():
+    """Own taskbar identity, so Windows uses this app's icon (not a cached one)."""
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("LMS.DroidTycoonHelper")
+        except Exception:
+            pass
+
+
 def main():
     print(__doc__)
     print("Version", VERSION)
+    if move_to_new_name():
+        return
+    set_app_id()
     if getattr(sys, "frozen", False):
         threading.Thread(target=cleanup_old_versions, daemon=True).start()
         if cfg["auto_update"]:
