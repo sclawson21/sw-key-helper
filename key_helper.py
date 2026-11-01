@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -3415,14 +3415,50 @@ PANEL_FILE = "app_window.html"
 _panel = {"port": None, "token": None, "proc": None}
 
 
+_panel_cache = {"html": None}
+
+
 def _panel_html():
-    for d in (getattr(sys, "_MEIPASS", BASE_DIR), BASE_DIR,
-              os.path.dirname(os.path.abspath(__file__))):
-        path = os.path.join(d, PANEL_FILE)
-        if os.path.exists(path):
+    """The app window page: packed inside the .exe, next to key_helper.py, or (if
+    the build didn't pack it) downloaded once from GitHub for this exact version."""
+    if _panel_cache["html"]:
+        return _panel_cache["html"]
+    cached = os.path.join(BASE_DIR, f"app_window_v{VERSION}.html")
+    places = [os.path.join(getattr(sys, "_MEIPASS", BASE_DIR), PANEL_FILE), cached]
+    if not getattr(sys, "frozen", False):                 # running key_helper.py itself
+        places.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), PANEL_FILE))
+    for path in places:
+        if os.path.exists(path) and os.path.getsize(path) > 1000:
             with open(path, encoding="utf-8") as f:
-                return f.read()
-    return "<h1>app_window.html is missing</h1>"
+                _panel_cache["html"] = f.read()
+            return _panel_cache["html"]
+    import urllib.request
+    for ref in (f"v{VERSION}", "main"):
+        try:
+            url = f"https://raw.githubusercontent.com/{UPDATE_REPO}/{ref}/{PANEL_FILE}"
+            req = urllib.request.Request(url, headers={"User-Agent": "SW-Key-Helper"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                html = r.read().decode("utf-8")
+            if "SW Key Helper" not in html:
+                continue
+            with open(cached, "w", encoding="utf-8") as f:
+                f.write(html)
+            for old in os.listdir(BASE_DIR):              # drop copies for older versions
+                if old.startswith("app_window_v") and old.endswith(".html") and \
+                        old != os.path.basename(cached):
+                    try:
+                        os.remove(os.path.join(BASE_DIR, old))
+                    except OSError:
+                        pass
+            print("Downloaded the app window page from GitHub", ref)
+            _panel_cache["html"] = html
+            return html
+        except Exception as e:
+            print("Couldn't download app_window.html from", ref, "-", e)
+    return ("<body style='background:#10151d;color:#e6ebf2;font:16px sans-serif;padding:40px'>"
+            "<h2>The app window page couldn't be loaded</h2><p>Make sure <b>app_window.html</b> "
+            "is uploaded to your GitHub repo next to key_helper.py, and that this PC is online, "
+            "then close this window and open it again from the tray icon.</p></body>")
 
 
 def _fortnite_hwnd():
