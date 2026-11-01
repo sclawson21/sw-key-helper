@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - "key_helper.py"
+      - "app_window.html"
       - "SW Key Helper.ico"
       - ".github/workflows/build.yml"
   workflow_dispatch:
@@ -47,13 +48,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Check the code for mistakes (stops broken releases)
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          python -m pip install pyflakes
+          python -m pyflakes key_helper.py
+
       - name: Install Tesseract
         if: steps.check.outputs.exists == 'false'
         run: choco install tesseract -y --no-progress
 
       - name: Install Python packages
         if: steps.check.outputs.exists == 'false'
-        run: python -m pip install pyinstaller mss opencv-python numpy pytesseract pydirectinput pynput pystray pillow
+        run: python -m pip install pyinstaller mss opencv-python numpy pytesseract pydirectinput pynput pystray pillow pywebview
 
       - name: Build SW Key Helper.exe
         if: steps.check.outputs.exists == 'false'
@@ -69,7 +76,10 @@ jobs:
             --hidden-import pynput.keyboard._win32 `
             --hidden-import pynput.mouse._win32 `
             --hidden-import pystray._win32 `
+            --hidden-import clr `
+            --collect-all webview `
             --add-data "SW Key Helper.ico;." `
+            --add-data "app_window.html;." `
             --add-data "$tess;tesseract" `
             key_helper.py
 
