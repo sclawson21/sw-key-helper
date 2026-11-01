@@ -55,7 +55,8 @@ os.chdir(BASE_DIR)
 # With no console window (double-click / .exe), keep messages in a log file
 if sys.stdout is None or sys.stderr is None or not sys.stdout.isatty():
     try:
-        _log = open(os.path.join(BASE_DIR, "key_helper.log"), "w", buffering=1,
+        _log = open(os.path.join(BASE_DIR, "window.log" if "--window" in sys.argv
+                                 else "key_helper.log"), "w", buffering=1,
                     encoding="utf-8", errors="replace")
         sys.stdout = sys.stderr = _log
     except Exception:
@@ -69,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.4.8"
+VERSION = "1.6.1"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -117,8 +118,16 @@ DEFAULTS = {
     # --- Inventory (LMS Droid Tycoon website) ---
     "inventory_player": "",     # which website player F9/F10 update (pick it in the tray menu)
     "kyber_default": "n",       # Kyber colour for added droids: n=Not Activated, g, b, p
-    "inv_add_key": "f9",
+    "inv_add_key": "f9",        # (older setting - the "hotkeys" list below is used now)
     "inv_remove_key": "f10",
+    # --- Hotkeys (change them in the app window: Hotkeys tab) ---
+    "hotkeys": {"menu": "insert", "faster": "page_up", "slower": "page_down",
+                "inv_add": "f9", "inv_remove": "f10", "area": "home",
+                "snapshot": "delete", "quit": "end"},
+    # --- App window (website on top, controls below) ---
+    "website_url": "",          # your LMS Droid Tycoon website address
+    "open_window_on_start": True,
+    "panel_height": 360,
     # --- Overlay ---
     "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
     "overlay": True,            # show the on-screen info box
@@ -161,6 +170,11 @@ def save_config():
 cfg = load_config()
 if cfg["allowed_keys"] == "EFZQ":  # older config files - the game added C
     cfg["allowed_keys"] = "EFZQC"
+_saved_hotkeys = cfg.get("hotkeys") if cfg.get("hotkeys") is not DEFAULTS["hotkeys"] else None
+cfg["hotkeys"] = {**DEFAULTS["hotkeys"], **(_saved_hotkeys or {})}
+if not _saved_hotkeys:                # older config: keep a changed F9/F10 setting
+    cfg["hotkeys"]["inv_add"] = cfg.get("inv_add_key") or "f9"
+    cfg["hotkeys"]["inv_remove"] = cfg.get("inv_remove_key") or "f10"
 
 
 def find_tesseract():
@@ -249,6 +263,7 @@ state = {
     "inv_pending": None, "inv_busy": False, "inv_lines": [], "inv_until": 0.0,
     "inv_color": None, "capture_hide": False,
     "clicks": 0, "spent": 0.0, "cost": "", "pending_roll": None, "roll_times": [],
+    "hk_capture": None, "hk_error": "", "update_status": "",
 }
 MODES = ["fishing", "traits", "clicker"]
 MODE_NAMES = ["Fishing", "Traits (droid scanner)", "Auto Clicker"]
@@ -318,9 +333,99 @@ def start_mode():
     notify(f"{state['mode'].title()} started")
 
 
+HOTKEY_ACTIONS = [            # (id, what it does) - keys live in cfg["hotkeys"]
+    ("menu", "Open menu / start / stop"),
+    ("faster", "Faster (fishing delay, clicker speed)"),
+    ("slower", "Slower"),
+    ("inv_add", "Add droid on screen to inventory"),
+    ("inv_remove", "Remove droid on screen from inventory"),
+    ("area", "Draw the fishing scan area"),
+    ("snapshot", "Save debug pictures"),
+    ("quit", "Quit SW Key Helper"),
+]
+APP_WINDOW_TITLE = "SW Key Helper"
+_KEY_LABELS = {"page_up": "Page Up", "page_down": "Page Down", "esc": "Esc",
+               "caps_lock": "Caps Lock", "num_lock": "Num Lock", "scroll_lock": "Scroll Lock",
+               "print_screen": "Print Screen", "pause": "Pause", "menu": "Menu key"}
+
+
+def key_name(key):
+    """A stable name for a pynput key: 'insert', 'f9', 'page_up', 'k', 'vk96'..."""
+    if isinstance(key, keyboard.Key):
+        return key.name
+    ch = getattr(key, "char", None)
+    if ch and ch.isprintable() and not ch.isspace():
+        return ch.lower()
+    vk = getattr(key, "vk", None)
+    return f"vk{vk}" if vk is not None else ""
+
+
+def pretty_key(name):
+    if not name:
+        return "(none)"
+    if name in _KEY_LABELS:
+        return _KEY_LABELS[name]
+    if re.fullmatch(r"f\d+", name):
+        return name.upper()
+    if name.startswith("vk") and name[2:].isdigit():
+        v = int(name[2:])
+        return f"Num {v - 96}" if 96 <= v <= 105 else f"Key {v}"
+    return name.replace("_", " ").title() if len(name) > 1 else name.upper()
+
+
+def hk(action):
+    return cfg["hotkeys"].get(action, "")
+
+
+def hk_label(action):
+    return pretty_key(hk(action))
+
+
+def hotkey_problem(name):
+    """Why a key can't be a hotkey (it's needed in the game or by the app), or ''."""
+    game = set(cfg["allowed_keys"].lower()) | {cfg["interact_key"].lower(), "w", "a", "s", "d"}
+    if name in ("up", "down", "left", "right"):
+        return "Arrow keys are used by the on-screen menus"
+    if name in ("esc", "enter", "space", "tab", "backspace"):
+        return f"{pretty_key(name)} is needed in the game"
+    if name.startswith(("shift", "ctrl", "alt", "cmd")):
+        return "Shift / Ctrl / Alt can't be used on their own"
+    if name in game:
+        return f"{name.upper()} is used in the game (fishing keys, F, WASD)"
+    return ""
+
+
+def finish_capture(name):
+    """A key was pressed while the Hotkeys tab was waiting for one."""
+    action = state["hk_capture"]
+    if name == "esc":
+        state["hk_capture"], state["hk_error"] = None, ""
+        return
+    why = hotkey_problem(name)
+    if why:
+        state["hk_error"] = why                   # keep waiting for another key
+        return
+    old = hk(action)
+    for other, k in cfg["hotkeys"].items():       # taken? swap the two
+        if other != action and k == name:
+            cfg["hotkeys"][other] = old
+    cfg["hotkeys"][action] = name
+    cfg["inv_add_key"], cfg["inv_remove_key"] = hk("inv_add"), hk("inv_remove")
+    save_config()
+    state["hk_capture"], state["hk_error"] = None, ""
+    notify(f"{dict(HOTKEY_ACTIONS)[action]}: {pretty_key(name)}", 3)
+
+
 def on_key(key):
     K = keyboard.Key
-    if key == K.insert:
+    name = key_name(key)
+    if state.get("hk_capture"):
+        finish_capture(name)
+        return
+    if foreground_title() == APP_WINDOW_TITLE:
+        return                                    # typing in the app window - not for us
+    act = next((a for a, k in cfg["hotkeys"].items() if k and k == name), None)
+    if act == "menu":
         if state["enabled"]:                      # running -> stop
             state["enabled"] = False
             notify(f"{state['mode'].title()} stopped")
@@ -379,31 +484,35 @@ def on_key(key):
             name = TRAIT_NAMES[state["pick_index"]]
             cur = cfg["trait_wanted"].get(name, "off")
             cfg["trait_wanted"][name] = CHOICES[(CHOICES.index(cur) + step) % len(CHOICES)]
-    elif key in (K.page_up, K.page_down) and state["mode"] == "clicker":
-        step = 1 if key == K.page_up else -1
-        if cfg["clicker_kind"] == "potion":       # Page Up = faster = shorter wait
+    elif act in ("faster", "slower"):
+        change_speed(1 if act == "faster" else -1)
+    elif act == "inv_add":
+        inventory_hotkey("add")
+    elif act == "inv_remove":
+        inventory_hotkey("remove")
+    elif act == "area" and not state["enabled"]:   # not while a mode is running
+        state["select_area"] = True
+    elif act == "snapshot":
+        state["snapshot"] = True
+    elif act == "quit":
+        state["quit"] = True
+        return False
+
+
+def change_speed(step):
+    """+1 = faster, -1 = slower (fishing press delay, or the clicker's speed)."""
+    if state["mode"] == "clicker":
+        if cfg["clicker_kind"] == "potion":       # faster = shorter wait
             cfg["potion_interval"] = int(min(20, max(2, cfg["potion_interval"] - step)))
             notify(f"Potion Grab: F every {cfg['potion_interval']} seconds")
         else:
             cfg["clicker_cps"] = int(min(50, max(1, cfg["clicker_cps"] + step)))
             notify(f"Scrap Hit: {cfg['clicker_cps']} clicks per second")
-        save_config()
-    elif key in (K.page_up, K.page_down):
-        step = -DELAY_STEP if key == K.page_up else DELAY_STEP
-        cfg["press_delay"] = round(min(DELAY_MAX, max(DELAY_MIN, cfg["press_delay"] + step)), 3)
-        save_config()
+    else:
+        cfg["press_delay"] = round(min(DELAY_MAX, max(DELAY_MIN,
+                                                      cfg["press_delay"] - step * DELAY_STEP)), 3)
         notify(f"Delay between presses: {int(cfg['press_delay'] * 1000)} ms")
-    elif key == getattr(K, cfg["inv_add_key"], None):
-        inventory_hotkey("add")
-    elif key == getattr(K, cfg["inv_remove_key"], None):
-        inventory_hotkey("remove")
-    elif key == K.home and not state["enabled"]:   # not while a mode is running
-        state["select_area"] = True
-    elif key == K.delete:
-        state["snapshot"] = True
-    elif key == K.end:
-        state["quit"] = True
-        return False
+    save_config()
 
 
 # ---------------------------------------------------------- tile detection ---
@@ -1623,7 +1732,7 @@ DROID_RAW = {
     "Epic": "EGL W,KT W,MPH A,N-UL W*,Gunrunner W,AMP Walker W,SEN-TRI W,Opti-Pod W,LO W,Groundmech W,SCRP-R A*,R2 A,TRAK-R A,R6 A,Util-Tec A,ORB-Walker A,BB A,OPT-AR B*,ARM-CORE B*,B1 Heavy B,Strike-Orb B,B2 Heavy B,LNG-Shot B,B2 Super B,Haul-R B,LOM P",
     "Legendary": "JO9-4MN W,PLNK W,FUS-3 W*,RO-TOR W*,Mono-WLKR W,Mecha-Droid W,Proto-Roller W,QIK-BIT A*,R7 A,BB9 A,ORB-XL B*,Opti-STRK B,B2-RP B,Cyclo-Grav B,PZ P",
     "Mythic": "ECG A,LOW-MO W*,RIV-3T W*,LUG-G W*,Loadlifter W,LEP W,RIC-1200 W,RIC W,Snow Mouse W,AXI-POD A*,MO-TRAK A,TRI-TEK A,DRFT-R A,CYCLENS A,X-ONK B*,SRV-O B*,KX B,IG B,TDA P",
-    "Iconic": "WG-22 B,D-O W,DJ R-3X W,BB-8 A,CB-23 A,Chopper A,R2-D2 A,IG-11 Marshal B,Mister Bones B,C-3PO P",
+    "Iconic": "Scourge Prime P,WG-22 B,D-O W,DJ R-3X W,BB-8 A,CB-23 A,Chopper A,R2-D2 A,IG-11 Marshal B,Mister Bones B,C-3PO P",
 }
 DROID_RARITY = {x[:x.rfind(" ")]: r for r, s in DROID_RAW.items() for x in s.split(",")}
 DROID_NAMES = list(DROID_RARITY)
@@ -2030,7 +2139,8 @@ def read_held_card(bgr):
 # Press once to read it, again within 8 seconds to confirm.
 
 VARIANT_KEY = {"DEFAULT": "0", "GOLD": "1", "DIAMOND": "2", "RAINBOW": "3",
-               "BESKAR": "4", "GALACTIC": "5", "STELLAR": "6"}
+               "BESKAR": "4", "GALACTIC": "5", "STELLAR": "6",
+               "SCOURGE": "8"}            # same keys as the website (Kyber = "7n"/"7g"/...)
 KYBER_KEYS = ["7n", "7g", "7b", "7p"]
 KYBER_NAMES = {"n": "Not Activated", "g": "Green", "b": "Blue", "p": "Purple"}
 _players = {"list": []}
@@ -2122,6 +2232,7 @@ def change_inventory(name, variant, delta, kyber=None):
            "&updateMask.fieldPaths=updatedAt"
     _http(url + "?" + mask, body, token=id_token(), method="PATCH")
     verb = "Added" if delta > 0 else "Removed"
+    state["data_version"] = state.get("data_version", 0) + 1     # app window reloads
     return f"{verb} {label}{name} – {player['name']} now has {new}"
 
 
@@ -2203,7 +2314,7 @@ def inventory_hotkey(action):
         inv_show("Offline - inventory changes need internet", 4, RED)
         return
     pend = state.get("inv_pending")
-    key_name = cfg["inv_add_key" if action == "add" else "inv_remove_key"].upper()
+    key_label = hk_label("inv_add" if action == "add" else "inv_remove")
 
     def work():
         state["inv_busy"] = True
@@ -2259,7 +2370,7 @@ def inventory_hotkey(action):
                 return
             state["inv_pending"] = {"action": action, "name": r["name"], "variant": r["variant"],
                                     "kyber": r.get("kyber"), "expires": time.time() + 12,
-                                    "player": player["name"], "key": key_name}
+                                    "player": player["name"], "key": key_label}
             show_pending()
         except AuthError as e:
             inv_show(f"Website said no: {e}", 6, RED)
@@ -2809,7 +2920,7 @@ def select_area(root):
         x0, x1 = sorted((drag["x"], e.x))
         y0, y1 = sorted((drag["y"], e.y))
         if x1 - x0 < 0.2 * m["width"] or y1 - y0 < 0.08 * m["height"]:
-            notify("Box too small - it must fit a whole key row. Press Home to try again.")
+            notify(f"Box too small - it must fit a whole key row. Press {hk_label('area')} to try again.")
         else:
             cfg["search_area"] = {"left": m["left"] + x0, "top": m["top"] + y0,
                                   "width": x1 - x0, "height": y1 - y0}
@@ -2863,7 +2974,7 @@ def run_windows():
     mini_dot = tk.Label(mini, bg=BG, fg=AMBER, font=("Segoe UI", 9, "bold"), text="\u25cf")
     mini_dot.pack(side="left")
     mini_text = tk.Label(mini, bg=BG, fg=DIM, font=("Segoe UI", 9),
-                         text=f"SW Key Helper v{VERSION} \u00b7 Insert = menu")
+                         text=f"SW Key Helper v{VERSION} \u00b7 {hk_label('menu')} = menu")
     mini_text.pack(side="left", padx=(4, 0))
 
     make_click_through(root)
@@ -2911,7 +3022,7 @@ def run_windows():
             reading.config(text="")
             pressed.config(text="")
             stats.config(text="Iconic droids are never rolled." if stage == "droids" else "")
-            hints.config(text="Up/Down choose \u00b7 Insert next")
+            hints.config(text=f"Up/Down choose \u00b7 {hk_label('menu')} next")
         elif picking:
             title.config(text="TRAITS \u2013 STOP ON WHICH?", fg=FG)
             badge = {"off": "  \u00b7  ", "any": " ANY ", "rainbow": "RAINBOW"}
@@ -2927,7 +3038,7 @@ def run_windows():
             reading.config(text="")
             pressed.config(text="")
             stats.config(text="")
-            hints.config(text="Up/Down move \u00b7 Left/Right change \u00b7 Insert start")
+            hints.config(text=f"Up/Down move \u00b7 Left/Right change \u00b7 {hk_label('menu')} start")
         elif state["menu_open"]:
             title.config(text="SW KEY HELPER \u2013 CHOOSE MODE", fg=FG)
             rows = [("\u25b6 " if state["menu_choice"] == i else "    ") + n
@@ -2935,7 +3046,7 @@ def run_windows():
             reading.config(text=rows[0])
             pressed.config(text=rows[1])
             stats.config(text=rows[2], fg=FG, font=("Segoe UI", 11))
-            hints.config(text="Up/Down choose \u00b7 Insert start")
+            hints.config(text=f"Up/Down choose \u00b7 {hk_label('menu')} start")
         else:
             if state["error"]:
                 title.config(text="SW KEY HELPER \u2013 PROBLEM", fg=RED)
@@ -2977,9 +3088,10 @@ def run_windows():
                                   f"Scan {state['scan_ms']} ms \u00b7 "
                                   f"Delay {int(cfg['press_delay'] * 1000)} ms \u00b7 "
                                   f"Inputs {state['inputs']} \u00b7 Area {area}", wraplength=440)
-            hints.config(text="Insert menu/start/stop \u00b7 PgUp/PgDn faster/slower\n"
-                              f"{cfg['inv_add_key'].upper()}/{cfg['inv_remove_key'].upper()} add/remove droid "
-                              "\u00b7 Home set area \u00b7 End quit")
+            hints.config(text=f"{hk_label('menu')} menu/start/stop \u00b7 "
+                              f"{hk_label('faster')}/{hk_label('slower')} faster/slower\n"
+                              f"{hk_label('inv_add')}/{hk_label('inv_remove')} add/remove droid "
+                              f"\u00b7 {hk_label('area')} set area \u00b7 {hk_label('quit')} quit")
         message.config(text=state["error"] or state["message"],
                        fg=RED if state["error"] else DIM)
         # small inventory box (F9/F10)
@@ -3042,6 +3154,7 @@ def version_tuple(text):
 
 def tray_message(msg):
     """Show a Windows notification from the tray icon (if there is one)."""
+    state["last_tray"] = msg
     icon = state.get("tray")
     if icon is not None:
         try:
@@ -3212,6 +3325,9 @@ def start_tray():
     def do_update(icon, item):
         threading.Thread(target=check_for_update, args=(True,), daemon=True).start()
 
+    def open_window(icon, item):
+        threading.Thread(target=open_app_window, daemon=True).start()
+
     def open_folder(icon, item):
         os.startfile(BASE_DIR)
 
@@ -3237,7 +3353,7 @@ def start_tray():
                 cfg["inventory_player"] = pid
                 save_config()
                 name = next((p["name"] for p in _players["list"] if p["id"] == pid), pid)
-                notify(f"F9/F10 now update {name}'s inventory", 4)
+                notify(f"{hk_label('inv_add')}/{hk_label('inv_remove')} now update {name}'s inventory", 4)
             return handler
 
         def is_current(pid):
@@ -3249,7 +3365,7 @@ def start_tray():
             pystray.MenuItem(f"Signed in as {_account['username']}", None, enabled=False),
         ]
         if player_items:
-            account_items.append(pystray.MenuItem("Inventory player (F9/F10)",
+            account_items.append(pystray.MenuItem(f"Inventory player ({hk_label('inv_add')}/{hk_label('inv_remove')})",
                                                   pystray.Menu(*player_items)))
         account_items.append(pystray.MenuItem("Sign out", do_sign_out))
     def pick_screen(value):
@@ -3272,6 +3388,7 @@ def start_tray():
                                              checked=screen_is(str(i)), radio=True))
     menu = pystray.Menu(
         pystray.MenuItem(f"SW Key Helper v{VERSION}", None, enabled=False),
+        pystray.MenuItem("Open app window", open_window),
         pystray.MenuItem("Screen", pystray.Menu(*screen_items)),
         *account_items,
         pystray.MenuItem("Discreet mode (hide badge when idle)", toggle_discreet,
@@ -3287,6 +3404,922 @@ def start_tray():
         icon.run()
     except Exception as e:
         print("Tray icon failed:", e)
+
+
+# -------------------------------------------------------------- app window ---
+# A window with your website on top and the app's controls underneath. The page is
+# served by this program on 127.0.0.1 only; a random token in the address keeps
+# other web pages from using it.
+
+PANEL_FILE = "app_window.html"
+_panel = {"port": None, "token": None, "proc": None}
+
+
+def _panel_html():
+    for d in (getattr(sys, "_MEIPASS", BASE_DIR), BASE_DIR,
+              os.path.dirname(os.path.abspath(__file__))):
+        path = os.path.join(d, PANEL_FILE)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return f.read()
+    return "<h1>app_window.html is missing</h1>"
+
+
+def _fortnite_hwnd():
+    if sys.platform != "win32":
+        return None
+    u = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def each(hwnd, _):
+        if u.IsWindowVisible(hwnd):
+            buf = ctypes.create_unicode_buffer(256)
+            u.GetWindowTextW(hwnd, buf, 256)
+            if "fortnite" in buf.value.lower():
+                found.append(hwnd)
+        return True
+
+    u.EnumWindows(each, 0)
+    return found[0] if found else None
+
+
+def focus_fortnite():
+    """Bring Fortnite to the front (so key presses and clicks go to the game).
+    True if it was found."""
+    hwnd = _fortnite_hwnd()
+    if not hwnd:
+        return False
+    try:
+        u = ctypes.windll.user32
+        if u.IsIconic(hwnd):
+            u.ShowWindow(hwnd, 9)                 # restore if minimised
+        u.keybd_event(0x12, 0, 0, 0)              # tap Alt - lets Windows switch focus
+        u.keybd_event(0x12, 0, 2, 0)
+        u.SetForegroundWindow(hwnd)
+    except Exception as e:
+        print("Couldn't bring Fortnite to the front:", e)
+    return True
+
+
+def panel_start(mode):
+    """Start button in the app window."""
+    if state["enabled"]:
+        return "Already running - stop it first"
+    if mode not in MODES:
+        return "Unknown mode"
+    if mode == "traits" and not any(v != "off" for v in cfg["trait_wanted"].values()):
+        return "Turn on at least one trait first"
+    found = focus_fortnite()
+    if not found and mode != "clicker" and sys.platform == "win32":
+        return "Fortnite isn't open - start the game first"
+    state["menu_open"] = False
+    state["mode"] = mode
+    save_config()
+
+    def go():
+        time.sleep(0.8)                           # let the game take focus first
+        if not state["enabled"]:
+            start_mode()
+    threading.Thread(target=go, daemon=True).start()
+    return ""
+
+
+def _pending_lines():
+    if state["inv_lines"] and time.time() < state["inv_until"]:
+        return state["inv_lines"]
+    return []
+
+
+def panel_state():
+    fr = state["fish_round"]
+    e = state.get("earn")
+    running = state["enabled"]
+    earn = ""
+    if e is not None and state["mode"] == "clicker":
+        try:
+            earn = earnings_text()
+        except Exception:
+            earn = ""
+    try:
+        odds = stats_summary()
+    except Exception:
+        odds = ""
+    players = _players["list"]
+    cur = None
+    try:
+        cur = (current_player() or {}).get("id") if players else None
+    except Exception:
+        pass
+    return {
+        "version": VERSION,
+        "data_version": state.get("data_version", 0),
+        "pictures": _pics["status"],
+        "running": running, "mode": state["mode"], "menu_open": state["menu_open"],
+        "error": state["error"], "message": state["message"],
+        "message_age": round(time.time() - (state["show_until"] - 2.5), 1),
+        "tray": state.get("last_tray", ""),
+        "fishing": {
+            "reading": state["reading"], "pressed": state["pressed"],
+            "scan_ms": state["scan_ms"], "inputs": state["inputs"],
+            "delay_ms": int(round(cfg["press_delay"] * 1000)),
+            "area": "custom" if cfg["search_area"] else "auto",
+            "require_prompt": cfg["require_prompt"],
+            "stats": fishing_stats_text(),
+            "round_active": fr["active"], "round_chips": format_amount(fr["chips"]) if fr["chips"] else "0",
+        },
+        "traits": {
+            "side": state["trait_side"], "droid": state.get("trait_droid", ""),
+            "rolls": state["rolls"], "trait": state["trait"], "status": state["status"],
+            "cost": state["cost"], "spent": format_amount(state["spent"]) if state["spent"] else "",
+            "wanted": {n: cfg["trait_wanted"].get(n, "off") for n in TRAIT_NAMES},
+            "always_rainbow": sorted(ALWAYS_RAINBOW),
+            "droids": cfg["trait_droids"], "max_cost": cfg["max_cost"], "cost_steps": COST_STEPS,
+            "roll_wait": cfg["roll_wait"], "max_rolls": cfg["max_rolls"],
+            "stop_if_unreadable": cfg["stop_if_unreadable"], "odds": odds,
+        },
+        "clicker": {
+            "kind": cfg["clicker_kind"], "cps": cfg["clicker_cps"],
+            "potion_interval": cfg["potion_interval"],
+            "only_fortnite": bool(cfg["clicker_window"].strip()),
+            "active": fmt_duration(state.get("active_secs", 0)), "earnings": earn,
+            "status": state["status"] if state["mode"] == "clicker" else "",
+        },
+        "inventory": {
+            "players": players, "player": cur, "kyber_default": cfg["kyber_default"],
+            "pending": _pending_lines(),
+        },
+        "hotkeys": [{"id": a, "label": label, "key": hk(a), "pretty": hk_label(a)}
+                    for a, label in HOTKEY_ACTIONS],
+        "capture": state["hk_capture"], "capture_error": state["hk_error"],
+        "settings": {
+            "monitor": str(cfg.get("monitor", "auto")),
+            "monitors": [{"id": str(i), "label": f"Screen {i} – {m['width']}×{m['height']}"
+                          + (" (main)" if i == 1 else "")} for i, m in enumerate(MONITORS, 1)],
+            "overlay": cfg["overlay"], "hide_when_paused": cfg["hide_when_paused"],
+            "mini_badge": cfg["mini_badge"], "discreet": cfg["discreet"],
+            "auto_update": cfg["auto_update"], "website_url": cfg["website_url"],
+            "open_window_on_start": cfg["open_window_on_start"],
+            "panel_height": cfg["panel_height"],
+        },
+        "account": {"username": _account.get("username", ""),
+                    "signed_in": bool(_account.get("refresh")),
+                    "offline": bool(_account.get("offline"))},
+    }
+
+
+def _as_bool(v):
+    return bool(v) if not isinstance(v, str) else v.lower() in ("1", "true", "yes", "on")
+
+
+def _clamp_num(v, lo, hi, kind=float):
+    return kind(min(hi, max(lo, kind(v))))
+
+
+def panel_set(key, value):
+    """Change one setting from the app window. Returns '' or a problem."""
+    if key == "press_delay_ms":
+        cfg["press_delay"] = round(_clamp_num(value, DELAY_MIN * 1000, DELAY_MAX * 1000) / 1000, 3)
+    elif key in ("require_prompt", "stop_if_unreadable", "overlay", "hide_when_paused",
+                 "mini_badge", "discreet", "auto_update", "open_window_on_start"):
+        cfg[key] = _as_bool(value)
+    elif key == "trait_wanted":
+        if not isinstance(value, dict):
+            return "bad value"
+        for n, c in value.items():
+            if n in TRAIT_NAMES and c in CHOICES:
+                cfg["trait_wanted"][n] = c
+    elif key == "trait_droids":
+        if value not in [c[0] for c in DROID_CHOICES]:
+            return "bad value"
+        cfg["trait_droids"] = value
+    elif key == "max_cost":
+        if value not in COST_STEPS:
+            return "bad value"
+        cfg["max_cost"] = value
+    elif key == "roll_wait":
+        cfg["roll_wait"] = round(_clamp_num(value, 3, 20), 1)
+    elif key == "max_rolls":
+        cfg["max_rolls"] = _clamp_num(value, 0, 1000000, int)
+    elif key == "clicker_kind":
+        if value not in [c[0] for c in CLICKER_CHOICES]:
+            return "bad value"
+        cfg["clicker_kind"] = value
+    elif key == "clicker_cps":
+        cfg["clicker_cps"] = _clamp_num(value, 1, 50, int)
+    elif key == "potion_interval":
+        cfg["potion_interval"] = _clamp_num(value, 2, 20, int)
+    elif key == "only_fortnite":
+        cfg["clicker_window"] = "Fortnite" if _as_bool(value) else ""
+    elif key == "inventory_player":
+        if value not in [p["id"] for p in _players["list"]]:
+            try:
+                list_players()                     # just added in the app window?
+            except Exception:
+                pass
+        if value not in [p["id"] for p in _players["list"]]:
+            return "unknown player"
+        cfg["inventory_player"] = value
+    elif key == "kyber_default":
+        if value not in KYBER_NAMES:
+            return "bad value"
+        cfg["kyber_default"] = value
+    elif key == "monitor":
+        value = str(value)
+        if value != "auto" and not (value.isdigit() and 1 <= int(value) <= len(MONITORS)):
+            return "bad value"
+        cfg["monitor"] = value
+        _screen_cache["time"] = 0
+    elif key == "website_url":
+        value = str(value).strip()
+        if value and not re.match(r"^https?://", value):
+            value = "https://" + value
+        if value and not re.match(r"^https?://[^\s/$.?#][^\s]*$", value):
+            return "That doesn't look like a web address"
+        cfg["website_url"] = value
+    elif key == "panel_height":
+        cfg["panel_height"] = _clamp_num(value, 60, 2000, int)
+    elif key == "mode":
+        if value not in MODES or state["enabled"]:
+            return "bad value"
+        state["mode"] = value
+        return ""
+    else:
+        return "unknown setting"
+    save_config()
+    return ""
+
+
+def panel_action(name, data):
+    if name == "start":
+        return panel_start(data.get("mode", state["mode"]))
+    if name == "stop":
+        if state["enabled"]:
+            state["enabled"] = False
+            notify(f"{state['mode'].title()} stopped")
+        return ""
+    if name == "select_area":
+        if state["enabled"]:
+            return "Stop first"
+        if not focus_fortnite() and sys.platform == "win32":
+            return "Fortnite isn't open"
+        state["select_area"] = True
+        return ""
+    if name == "reset_area":
+        cfg["search_area"] = None
+        save_config()
+        notify("Back to automatic scan area.")
+        return ""
+    if name == "capture_hotkey":
+        if data.get("id") not in dict(HOTKEY_ACTIONS):
+            return "unknown hotkey"
+        state["hk_capture"], state["hk_error"] = data["id"], ""
+        return ""
+    if name == "cancel_capture":
+        state["hk_capture"], state["hk_error"] = None, ""
+        return ""
+    if name == "reset_hotkeys":
+        cfg["hotkeys"] = dict(DEFAULTS["hotkeys"])
+        cfg["inv_add_key"], cfg["inv_remove_key"] = hk("inv_add"), hk("inv_remove")
+        save_config()
+        notify("Hotkeys reset to the defaults", 3)
+        return ""
+    if name == "check_update":
+        threading.Thread(target=check_for_update, args=(True,), daemon=True).start()
+        return ""
+    if name == "refresh_players":
+        try:
+            list_players()
+        except Exception as e:
+            return f"Couldn't load players: {e}"
+        return ""
+    if name == "reload_pictures":
+        threading.Thread(target=build_picture_index, args=(True,), daemon=True).start()
+        return ""
+    if name == "refresh_odds":
+        fetch_shared()
+        return ""
+    if name == "open_folder":
+        if sys.platform == "win32":
+            os.startfile(BASE_DIR)
+        return ""
+    if name == "sign_out":
+        sign_out()
+        state["quit"] = True
+        return ""
+    if name == "quit":
+        state["quit"] = True
+        return ""
+    return "unknown action"
+
+
+# ---- website data in the app window (same Firestore documents as the website) ----
+
+def _to_fs(v):
+    """Python/JSON value -> Firestore REST value."""
+    if v is None:
+        return {"nullValue": None}
+    if isinstance(v, bool):
+        return {"booleanValue": v}
+    if isinstance(v, int):
+        return {"integerValue": str(v)}
+    if isinstance(v, float):
+        return {"integerValue": str(int(v))} if v.is_integer() and abs(v) < 2 ** 53 \
+            else {"doubleValue": v}
+    if isinstance(v, str):
+        return {"stringValue": v}
+    if isinstance(v, (list, tuple)):
+        return {"arrayValue": {"values": [_to_fs(x) for x in v]}}
+    if isinstance(v, dict):
+        return {"mapValue": {"fields": {str(k): _to_fs(x) for k, x in v.items()}}}
+    return {"stringValue": str(v)}
+
+
+def _players_url(pid=None):
+    base = _firestore_base() + f"/users/{_account['uid']}/players"
+    return base + (f"/{pid}" if pid else "")
+
+
+def data_load_players():
+    """Every player document on this login, as the website stores them."""
+    out, page = {}, ""
+    while True:
+        r = _http(_players_url() + "?pageSize=100" + (f"&pageToken={page}" if page else ""),
+                  token=id_token())
+        for d in r.get("documents", []):
+            pid = d["name"].rsplit("/", 1)[-1]
+            out[pid] = {k: _fs_value(x) for k, x in d.get("fields", {}).items()}
+        page = r.get("nextPageToken", "")
+        if not page:
+            break
+    _players["list"] = sorted(({"id": k, "name": v.get("name", k)} for k, v in out.items()),
+                              key=lambda p: p["name"].lower())
+    return out
+
+
+def data_save_player(pid, data):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,60}", pid or ""):
+        raise ValueError("bad player id")
+    data = dict(data or {})
+    data["updatedAt"] = int(time.time() * 1000)
+    body = {"fields": {k: _to_fs(v) for k, v in data.items()}}
+    _http(_players_url(pid), body, token=id_token(), method="PATCH")   # whole document
+    return data["updatedAt"]
+
+
+def data_delete_player(pid):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,60}", pid or ""):
+        raise ValueError("bad player id")
+    _http(_players_url(pid), token=id_token(), method="DELETE")
+
+
+# ---- droid pictures: looked up on the Droid Tycoon wiki, saved next to the app ----
+WIKI_API = "https://star-wars-droid-tycoon.fandom.com/api.php"
+PIC_DIR = "droid_pictures"
+_pics = {"index": None, "status": "", "loading": False}
+_VARIANT_WORDS = {"default": "0", "base": "0", "basic": "0", "normal": "0", "regular": "0",
+                  "gold": "1", "golden": "1", "diamond": "2", "rainbow": "3", "beskar": "4",
+                  "galactic": "5", "stellar": "6", "kyber": "7", "scourge": "8"}
+_KYBER_WORDS = {"green": "g", "blue": "b", "purple": "p", "inactive": "n", "unactivated": "n",
+                "activated": "", "not": "n"}
+_NOISE_WORDS = {"droid", "png", "jpg", "jpeg", "webp", "gif", "icon", "render", "image", "img",
+                "portrait", "card", "fortnite", "dt", "sw", "variant", "tycoon", "model",
+                "full", "art", "the", "star", "wars", "version", "skin", "large", "big"}
+
+
+def _pic_tokens(text):
+    text = re.sub(r"\.(png|jpe?g|webp|gif)$", "", text.lower())
+    text = re.sub(r"^file:", "", text)
+    return [t for t in re.split(r"[^a-z0-9]+", text) if t]
+
+
+def match_picture(title, names):
+    """(droid name, variant key) a wiki file shows, or None. Strict: every word in
+    the file name must be the droid's name, a variant word or a harmless word, so
+    'BB-8 Gold' is never taken for 'BB Gold'."""
+    toks = _pic_tokens(title)
+    best = None
+    for name in names:
+        nt = _pic_tokens(name)
+        n = len(nt)
+        for i in range(len(toks) - n + 1):
+            if toks[i:i + n] != nt:
+                continue
+            rest = toks[:i] + toks[i + n:]
+            var, kyc, ok = None, None, True
+            for t in rest:
+                if t in _VARIANT_WORDS:
+                    if var not in (None, _VARIANT_WORDS[t]):
+                        ok = False
+                    var = _VARIANT_WORDS[t]
+                elif t in _KYBER_WORDS:
+                    kyc = _KYBER_WORDS[t] if kyc is None else kyc
+                elif t not in _NOISE_WORDS:
+                    ok = False
+                if not ok:
+                    break
+            if not ok:
+                continue
+            if kyc and var is None:
+                var = "7"
+            key = var or "0"
+            if key == "7":
+                key = "7" + (kyc if kyc in ("g", "b", "p", "n") else "")
+            elif kyc:                                  # colour words on a non-Kyber
+                continue
+            score = (n, -len(rest))                    # longer name match, fewer extras
+            if best is None or score > best[0]:
+                best = (score, name, key)
+    return (best[1], best[2]) if best else None
+
+
+def _wiki_get(params):
+    import urllib.request
+    import urllib.parse
+    url = WIKI_API + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={
+        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) SW-Key-Helper/{VERSION}"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.load(r)
+
+
+DROIDEX_PAGE = "Droidex"
+
+
+class _Node:
+    __slots__ = ("tag", "attrs", "kids", "parent", "text")
+
+    def __init__(self, tag, attrs, parent):
+        self.tag, self.attrs, self.parent, self.kids, self.text = tag, attrs, parent, [], []
+
+
+def _parse_dom(html):
+    """Tiny DOM from wiki HTML (enough to find each picture's table cell / caption)."""
+    from html.parser import HTMLParser
+    VOID = {"img", "br", "hr", "meta", "link", "input", "source", "wbr", "col"}
+    root = _Node("root", {}, None)
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.cur = root
+
+        def handle_starttag(self, tag, attrs):
+            n = _Node(tag, dict(attrs), self.cur)
+            self.cur.kids.append(n)
+            if tag not in VOID:
+                self.cur = n
+
+        def handle_endtag(self, tag):
+            c = self.cur
+            while c is not root and c.tag != tag:
+                c = c.parent
+            if c is not root:
+                self.cur = c.parent
+
+        def handle_data(self, data):
+            self.cur.kids.append(data)
+
+    P().feed(html)
+    return root
+
+
+def _text(n):
+    out = []
+
+    def walk(x):
+        if isinstance(x, str):
+            out.append(x)
+        else:
+            for k in x.kids:
+                walk(k)
+    walk(n)
+    return re.sub(r"\s+", " ", " ".join(out)).strip()
+
+
+def _find_name_in(text, names):
+    toks = _pic_tokens(text)
+    best = None
+    for name in names:
+        nt = _pic_tokens(name)
+        for i in range(len(toks) - len(nt) + 1):
+            if toks[i:i + len(nt)] == nt:
+                # don't take "BB" out of "BB 8" / "BB9": the next word mustn't continue the name
+                nxt = toks[i + len(nt)] if i + len(nt) < len(toks) else ""
+                if nxt.isdigit() and len(nxt) <= 2:
+                    continue
+                if best is None or len(nt) > len(_pic_tokens(best)):
+                    best = name
+    return best
+
+
+def _find_variant_in(text):
+    toks = _pic_tokens(text)
+    var = next((_VARIANT_WORDS[t] for t in toks if t in _VARIANT_WORDS), None)
+    kyc = next((_KYBER_WORDS[t] for t in toks if t in _KYBER_WORDS and _KYBER_WORDS[t]), None)
+    if var == "7" or (var is None and kyc):
+        return "7" + (kyc or "")
+    return var
+
+
+def droidex_pictures(html, names):
+    """{'Name|key': url} from the wiki's Droidex page: each picture is matched by its
+    file name, or else by the droid name / variant written in its table cell, row,
+    column heading or caption."""
+    root = _parse_dom(html)
+    found = {}
+
+    def img_url(a):
+        for k in ("data-src", "src"):
+            u = a.get(k) or ""
+            if u.startswith("http") and "wikia" in u or u.startswith("http") and "nocookie" in u:
+                return re.sub(r"/revision/latest/[^?]*", "/revision/latest", u)
+        return None
+
+    def ancestors(n):
+        while n is not None:
+            yield n
+            n = n.parent
+
+    def walk(n):
+        for k in n.kids:
+            if isinstance(k, str):
+                continue
+            if k.tag == "img":
+                handle(k)
+            walk(k)
+
+    def handle(img):
+        url = img_url(img.attrs)
+        if not url:
+            return
+        fname = img.attrs.get("data-image-name") or img.attrs.get("data-image-key") or \
+            url.split("/revision/")[0].rsplit("/", 1)[-1]
+        fname = re.sub(r"%[0-9A-Fa-f]{2}", " ", fname)
+        m = match_picture(fname, names)
+        explicit = m is not None and any(t in _VARIANT_WORDS or t in _KYBER_WORDS
+                                         for t in _pic_tokens(fname))
+        if m is None or not explicit:
+            ctx_cell, ctx_row, ctx_col = "", "", ""
+            alt = (img.attrs.get("alt") or "") + " " + \
+                next((a.attrs.get("title", "") for a in ancestors(img) if a.tag == "a"), "")
+            cell = next((a for a in ancestors(img) if a.tag in ("td", "th", "li", "figure")
+                         or "gallery" in a.attrs.get("class", "")), None)
+            if cell is not None:
+                ctx_cell = _text(cell)
+                if cell.tag in ("td", "th"):
+                    row = cell.parent
+                    cells = [c for c in row.kids if not isinstance(c, str) and c.tag in ("td", "th")]
+                    col = cells.index(cell) if cell in cells else -1
+                    ctx_row = " ".join(_text(c) for c in cells[:2])
+                    table = next((a for a in ancestors(row) if a.tag == "table"), None)
+                    if table is not None and col >= 0:
+                        first = next(_iter_tag(table, "tr"), None)
+                        if first is not None and first is not row:
+                            hdr = [c for c in first.kids if not isinstance(c, str) and c.tag in ("td", "th")]
+                            if col < len(hdr):
+                                ctx_col = _text(hdr[col])
+            var = (_find_variant_in(fname) or _find_variant_in(alt) or _find_variant_in(ctx_cell)
+                   or _find_variant_in(ctx_col) or _find_variant_in(_tab_label(img)))
+            if m is not None:
+                m = (m[0], var or m[1])
+            else:
+                name = (_find_name_in(alt, names) or _find_name_in(ctx_cell, names)
+                        or _find_name_in(ctx_row, names))
+                if not name:
+                    return
+                m = (name, var or "0")
+        key = f"{m[0]}|{m[1]}"
+        found.setdefault(key, url)
+
+    walk(root)
+    return found
+
+
+def _tab_label(n):
+    """Label of the tab (Fandom 'tabber') a picture sits in, e.g. 'Gold'."""
+    labels = []
+    while n is not None:
+        cls = n.attrs.get("class", "") if not isinstance(n, str) else ""
+        if "wds-tab__content" in cls or "tabbertab" in cls:
+            if n.attrs.get("title"):
+                labels.append(n.attrs["title"])
+            else:
+                par = n.parent
+                contents = [k for k in par.kids if not isinstance(k, str)
+                            and "wds-tab__content" in k.attrs.get("class", "")]
+                tabs = [t for t in _iter_tag(par, "li") if "wds-tabs__tab" in t.attrs.get("class", "")]
+                i = contents.index(n) if n in contents else -1
+                if 0 <= i < len(tabs):
+                    labels.append(tabs[i].attrs.get("data-hash") or _text(tabs[i]))
+        n = n.parent
+    return " ".join(labels)
+
+
+def _iter_tag(n, tag):
+    for k in n.kids:
+        if isinstance(k, str):
+            continue
+        if k.tag == tag:
+            yield k
+        yield from _iter_tag(k, tag)
+
+
+def build_picture_index(force=False):
+    """List the wiki's pictures once (refreshed weekly) and work out which droid and
+    variant each one shows."""
+    path = os.path.join(PIC_DIR, "index.json")
+    if not force and _pics["index"] is None:
+        try:
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("t", 0) < 7 * 86400 and saved.get("map"):
+                _pics["index"] = saved["map"]
+                _pics["status"] = f"{len(saved['map'])} pictures from the wiki"
+                return
+        except Exception:
+            pass
+    if _pics["loading"]:
+        return
+    _pics["loading"] = True
+    _pics["status"] = "Looking up droid pictures on the wiki…"
+    try:
+        files, cont = [], {}
+        try:
+            for _ in range(40):                      # up to 20,000 files
+                r = _wiki_get({"action": "query", "list": "allimages", "ailimit": "500",
+                               "aiprop": "url", "format": "json", **cont})
+                files += r.get("query", {}).get("allimages", [])
+                cont = r.get("continue") or {}
+                if not cont:
+                    break
+        except Exception as e:
+            print("Couldn't list the wiki's pictures:", e)
+        names = list(DROID_RARITY)
+        found = {}
+        try:
+            r = _wiki_get({"action": "parse", "page": DROIDEX_PAGE, "prop": "text",
+                           "format": "json", "formatversion": "2"})
+            page_html = r.get("parse", {}).get("text", "")
+            if isinstance(page_html, dict):
+                page_html = page_html.get("*", "")
+            for k, u in droidex_pictures(page_html, names).items():
+                found[k] = ("", u)
+            print("Droidex page pictures:", len(found))
+        except Exception as e:
+            print("Couldn't read the Droidex page:", e)
+        for f in files:
+            m = match_picture(f.get("name", ""), names)
+            if not m or not f.get("url"):
+                continue
+            key = f"{m[0]}|{m[1]}"
+            prev = found.get(key)
+            if prev is not None and prev[0] == "":
+                continue                             # the Droidex page already has one
+            if prev is None or len(f["name"]) < len(prev[0]):
+                found[key] = (f["name"], f["url"])
+        mapping = {k: v[1] for k, v in found.items()}
+        for f in os.listdir(PIC_DIR) if os.path.isdir(PIC_DIR) else []:
+            if f.endswith(".png") and force:
+                try:
+                    os.remove(os.path.join(PIC_DIR, f))   # "Look again": fetch fresh copies
+                except OSError:
+                    pass
+        os.makedirs(PIC_DIR, exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump({"t": time.time(), "files": len(files), "map": mapping}, fh)
+        _pics["index"] = mapping
+        droids = len({k.split("|")[0] for k in mapping})
+        _pics["status"] = (f"{len(mapping)} pictures for {droids} of {len(DROID_RARITY)} droids from the wiki"
+                           if mapping else "Couldn't match any wiki pictures to droids")
+        print("Droid pictures:", _pics["status"])
+    except Exception as e:
+        print("Couldn't load droid pictures:", e)
+        _pics["status"] = f"Couldn't reach the wiki for pictures ({e})"[:140]
+        if _pics["index"] is None:
+            _pics["index"] = {}
+    finally:
+        _pics["loading"] = False
+    state["data_version"] = state.get("data_version", 0) + 1     # let the window redraw
+
+
+def picture_file(name, key):
+    """Local file for a droid picture (downloaded on first use), or None."""
+    idx = _pics["index"]
+    if not idx:
+        return None
+    tries = [key]
+    if key.startswith("7") and len(key) == 2:
+        tries += ["7", "7n", "7g"]                   # any Kyber picture beats none
+    elif key == "7":
+        tries += ["7n", "7g", "7b", "7p"]
+    url = None
+    for k in tries:
+        url = idx.get(f"{name}|{k}")
+        if url:
+            key = k
+            break
+    if not url:
+        return None
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{name}_{key}")
+    path = os.path.join(PIC_DIR, safe + ".png")
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        return path
+    import urllib.request
+    small = url
+    if "/revision/latest" in url and "scale-to-width" not in url:
+        small = url.replace("/revision/latest", "/revision/latest/scale-to-width-down/320", 1)
+    try:
+        req = urllib.request.Request(small, headers={"User-Agent": "Mozilla/5.0 SW-Key-Helper"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = r.read(5_000_000)
+        os.makedirs(PIC_DIR, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+    except Exception as e:
+        print("Picture download failed:", name, key, e)
+        return None
+
+
+def start_panel_server():
+    import http.server
+    import secrets
+    import urllib.parse
+    token = secrets.token_urlsafe(18)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, body, ctype="application/json"):
+            data = body if isinstance(body, bytes) else body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype + "; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _authed(self):
+            return secrets.compare_digest(self.headers.get("X-Token", ""), token)
+
+        def do_GET(self):
+            path = urllib.parse.urlsplit(self.path).path
+            if path in ("/", "/index.html"):
+                self._send(200, _panel_html(), "text/html")
+            elif path == "/api/state" and self._authed():
+                self._send(200, json.dumps(panel_state()))
+            elif path == "/img":
+                q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                name, key = q.get("d", [""])[0], q.get("v", ["0"])[0]
+                f = picture_file(name, key) if name in DROID_RARITY else None
+                if f:
+                    with open(f, "rb") as fh:
+                        data = fh.read()
+                    ctype = "image/webp" if data[:4] == b"RIFF" else (
+                        "image/jpeg" if data[:2] == b"\xff\xd8" else "image/png")
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Cache-Control", "max-age=86400")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    self._send(404, "{}")
+            elif path == "/api/players" and self._authed():
+                try:
+                    self._send(200, json.dumps({"ok": True, "players": data_load_players(),
+                                                "player": cfg["inventory_player"]}))
+                except Exception as e:
+                    self._send(200, json.dumps({"ok": False, "error": str(e)}))
+            elif path == "/icon.ico":
+                try:
+                    with open(os.path.join(getattr(sys, "_MEIPASS", BASE_DIR),
+                                           "SW Key Helper.ico"), "rb") as f:
+                        self._send(200, f.read(), "image/x-icon")
+                except OSError:
+                    self._send(404, "{}")
+            else:
+                self._send(404 if path != "/api/state" else 403, "{}")
+
+        def do_POST(self):
+            if not self._authed():
+                self._send(403, "{}")
+                return
+            try:
+                n = min(int(self.headers.get("Content-Length", 0)), 100000)
+                data = json.loads(self.rfile.read(n) or b"{}")
+                path = urllib.parse.urlsplit(self.path).path
+                if path == "/api/set":
+                    err = panel_set(data.get("key"), data.get("value"))
+                elif path == "/api/action":
+                    err = panel_action(data.get("action"), data)
+                elif path == "/api/player":
+                    t = data_save_player(data.get("id"), data.get("data"))
+                    self._send(200, json.dumps({"ok": True, "updatedAt": t}))
+                    return
+                elif path == "/api/player_delete":
+                    data_delete_player(data.get("id"))
+                    err = ""
+                else:
+                    self._send(404, "{}")
+                    return
+                self._send(200, json.dumps({"ok": not err, "error": err}))
+            except Exception as e:
+                print("App window request failed:", e)
+                self._send(200, json.dumps({"ok": False, "error": str(e)}))
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    srv.daemon_threads = True
+    _panel.update(port=srv.server_address[1], token=token)
+    threading.Thread(target=build_picture_index, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print("App window page on port", _panel["port"])
+    return srv
+
+
+def panel_url():
+    return f"http://127.0.0.1:{_panel['port']}/#t={_panel['token']}"
+
+
+def open_app_window():
+    """Show the app window (its own small process, so a problem there can't stop
+    the hotkeys). Falls back to Edge's app mode, then the normal browser."""
+    if not _panel["port"]:
+        return
+    p = _panel.get("proc")
+    if p is not None and p.poll() is None:
+        try:                                     # already open - bring it forward
+            u = ctypes.windll.user32
+            hwnd = u.FindWindowW(None, APP_WINDOW_TITLE)
+            if hwnd:
+                if u.IsIconic(hwnd):
+                    u.ShowWindow(hwnd, 9)
+                u.keybd_event(0x12, 0, 0, 0)
+                u.keybd_event(0x12, 0, 2, 0)
+                u.SetForegroundWindow(hwnd)
+                return
+        except Exception:
+            pass
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--window", panel_url()]
+    else:
+        cmd = [sys.executable, os.path.abspath(__file__), "--window", panel_url()]
+    try:
+        _panel["proc"] = subprocess.Popen(cmd, cwd=BASE_DIR)
+    except OSError as e:
+        print("Couldn't open the app window:", e)
+        _open_in_browser(panel_url())
+
+
+def _open_in_browser(url):
+    edge = [os.path.join(os.environ.get(k, ""), "Microsoft", "Edge", "Application", "msedge.exe")
+            for k in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
+    for path in edge:
+        if os.path.exists(path):
+            try:
+                subprocess.Popen([path, f"--app={url}", "--window-size=1400,950",
+                                  "--user-data-dir=" + os.path.join(BASE_DIR, "app_data")])
+                return
+            except OSError:
+                pass
+    import webbrowser
+    webbrowser.open(url)
+
+
+def run_window_process(url):
+    """'SW Key Helper.exe --window <address>': just the app window."""
+    data_dir = os.path.join(BASE_DIR, "app_data")
+    try:
+        import webview
+    except Exception as e:
+        print("pywebview not available:", e)
+        _open_in_browser(url)
+        return
+
+    def watchdog(win):
+        """Close the window when the main app quits."""
+        import urllib.request
+        misses = 0
+        while True:
+            time.sleep(2)
+            try:
+                urllib.request.urlopen(url.split("#")[0], timeout=2).read(16)
+                misses = 0
+            except Exception:
+                misses += 1
+                if misses >= 3:
+                    win.destroy()
+                    return
+
+    try:
+        win = webview.create_window(APP_WINDOW_TITLE, url, width=1400, height=950,
+                                    min_size=(820, 560), background_color="#0e1014")
+        webview.start(func=watchdog, args=(win,), private_mode=False, storage_path=data_dir)
+    except Exception as e:
+        print("App window failed:", e)
+        _open_in_browser(url)
 
 
 def main():
@@ -3313,11 +4346,23 @@ def main():
     listener.start()
     threading.Thread(target=scanner, daemon=True).start()
     try:
+        start_panel_server()
+        if cfg["open_window_on_start"]:
+            open_app_window()
+    except Exception as e:
+        print("App window unavailable:", e)
+    try:
         run_windows()
     except KeyboardInterrupt:
         pass
     state["quit"] = True
     listener.stop()
+    p = _panel.get("proc")
+    if p is not None and p.poll() is None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
     if state.get("tray") is not None:
         try:
             state["tray"].stop()
@@ -3343,4 +4388,7 @@ def restart_new_version():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) >= 3 and sys.argv[1] == "--window":
+        run_window_process(sys.argv[2])
+    else:
+        main()
