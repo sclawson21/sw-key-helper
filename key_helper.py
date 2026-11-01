@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.6.2"
+VERSION = "1.6.4"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -3812,13 +3812,20 @@ def data_delete_player(pid):
 # ---- droid pictures: looked up on the Droid Tycoon wiki, saved next to the app ----
 WIKI_API = "https://star-wars-droid-tycoon.fandom.com/api.php"
 PIC_DIR = "droid_pictures"
+PIC_MATCH_VERSION = 2          # raise when the matching changes, so saved lists are redone
 _pics = {"index": None, "status": "", "loading": False}
 _VARIANT_WORDS = {"default": "0", "base": "0", "basic": "0", "normal": "0", "regular": "0",
                   "gold": "1", "golden": "1", "diamond": "2", "rainbow": "3", "beskar": "4",
                   "galactic": "5", "stellar": "6", "kyber": "7", "scourge": "8"}
 _KYBER_WORDS = {"green": "g", "blue": "b", "purple": "p", "inactive": "n", "unactivated": "n",
                 "activated": "", "not": "n"}
-_NOISE_WORDS = {"droid", "png", "jpg", "jpeg", "webp", "gif", "icon", "render", "image", "img",
+# other spellings the wiki may use -> the app's droid name
+PIC_ALIASES = {"GNK": "Gonk", "GNK Droid": "Gonk", "GNK Power Droid": "Gonk", "Power Droid": "Gonk",
+               "IG-11 Marshall": "IG-11 Marshal", "IG-11": "IG-11 Marshal", "IG11": "IG-11 Marshal",
+               "IG11 Marshal": "IG-11 Marshal", "BU4D": "BU-4D", "BU 4 D": "BU-4D", "BU4-D": "BU-4D",
+               "ScourgePrime": "Scourge Prime"}
+_NOISE_WORDS = {"worker", "astromech", "battle", "protocol", "common", "rare", "epic", "legendary",
+                "mythic", "iconic", "series", "unit", "power", "droid", "png", "jpg", "jpeg", "webp", "gif", "icon", "render", "image", "img",
                 "portrait", "card", "fortnite", "dt", "sw", "variant", "tycoon", "model",
                 "full", "art", "the", "star", "wars", "version", "skin", "large", "big"}
 
@@ -3866,7 +3873,7 @@ def match_picture(title, names):
             score = (n, -len(rest))                    # longer name match, fewer extras
             if best is None or score > best[0]:
                 best = (score, name, key)
-    return (best[1], best[2]) if best else None
+    return (PIC_ALIASES.get(best[1], best[1]), best[2]) if best else None
 
 
 def _wiki_get(params):
@@ -4024,7 +4031,7 @@ def droidex_pictures(html, names):
                         or _find_name_in(ctx_row, names))
                 if not name:
                     return
-                m = (name, var or "0")
+                m = (PIC_ALIASES.get(name, name), var or "0")
         key = f"{m[0]}|{m[1]}"
         found.setdefault(key, url)
 
@@ -4069,9 +4076,13 @@ def build_picture_index(force=False):
         try:
             with open(path) as f:
                 saved = json.load(f)
-            if time.time() - saved.get("t", 0) < 7 * 86400 and saved.get("map"):
+            if time.time() - saved.get("t", 0) < 7 * 86400 and saved.get("map") \
+                    and saved.get("v") == PIC_MATCH_VERSION:
                 _pics["index"] = saved["map"]
-                _pics["status"] = f"{len(saved['map'])} pictures from the wiki"
+                have = {k.split("|")[0] for k in saved["map"]}
+                missing = sorted(set(DROID_RARITY) - have)
+                _pics["status"] = (f"{len(saved['map'])} pictures for {len(have)} of {len(DROID_RARITY)} droids"
+                                   + (f". No picture yet: {', '.join(missing)}" if missing else ""))
                 return
         except Exception:
             pass
@@ -4091,7 +4102,7 @@ def build_picture_index(force=False):
                     break
         except Exception as e:
             print("Couldn't list the wiki's pictures:", e)
-        names = list(DROID_RARITY)
+        names = list(DROID_RARITY) + list(PIC_ALIASES)
         found = {}
         try:
             r = _wiki_get({"action": "parse", "page": DROIDEX_PAGE, "prop": "text",
@@ -4123,10 +4134,13 @@ def build_picture_index(force=False):
                     pass
         os.makedirs(PIC_DIR, exist_ok=True)
         with open(path, "w") as fh:
-            json.dump({"t": time.time(), "files": len(files), "map": mapping}, fh)
+            json.dump({"t": time.time(), "v": PIC_MATCH_VERSION, "files": len(files),
+                       "map": mapping}, fh)
         _pics["index"] = mapping
-        droids = len({k.split("|")[0] for k in mapping})
-        _pics["status"] = (f"{len(mapping)} pictures for {droids} of {len(DROID_RARITY)} droids from the wiki"
+        have = {k.split("|")[0] for k in mapping}
+        missing = sorted(set(DROID_RARITY) - have)
+        _pics["status"] = (f"{len(mapping)} pictures for {len(have)} of {len(DROID_RARITY)} droids from the wiki"
+                           + (f". No picture yet: {', '.join(missing)}" if missing else "")
                            if mapping else "Couldn't match any wiki pictures to droids")
         print("Droid pictures:", _pics["status"])
     except Exception as e:
