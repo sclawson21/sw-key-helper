@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.8.2"
+VERSION = "1.8.3"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -1697,7 +1697,9 @@ def run_traits(sct):
                 stop_traits("Couldn't open the droid menu - stand at the trait scanner")
                 return
 
-            # 2. Pick the droid (left or right) - never an Iconic one
+            # 2. Pick the droid (left or right) - never an Iconic one.
+            # While one droid is still rolling, F skips the Select Droid screen and opens
+            # the other (free) droid's panel straight away - that's this droid.
             if found[0] != "select" and not st["checked"]:
                 stop_traits("Couldn't see the Select Droid screen to check the droid's "
                             "rarity - stopped to be safe")
@@ -1709,18 +1711,29 @@ def run_traits(sct):
                 settled = wait_for_menu(sct, "select", 1.5, side) or found
                 if settled[0] != "select":
                     settled = found
-                if not st["checked"]:
-                    verdict, dname = droid_card_check(grab_screen(sct), settled[1])
-                    if verdict == "iconic":
-                        stop_traits(f"The {side} droid is Iconic ({dname or 'Iconic'}) - "
-                                    "never rolling Iconics. Stopped.")
-                        return
-                    if verdict == "unsure":
-                        stop_traits(f"Couldn't tell if the {side} droid is Iconic - "
-                                    "stopped to be safe")
-                        return
-                    st["checked"], st["droid"] = True, dname
-                    state["trait_droid"] = dname
+                if not all(info[sd]["checked"] for sd in sides):
+                    # check every droid we'll roll now, while both cards are on screen
+                    shot = grab_screen(sct)
+                    for sd in sides:
+                        if info[sd]["checked"]:
+                            continue
+                        btn = settled[1] if sd == side else (find_menu(shot, sd) or (None, None))[1]
+                        if btn is None:
+                            if sd == side:
+                                stop_traits(f"Couldn't see the {sd} droid's card - stopped to be safe")
+                                return
+                            continue
+                        verdict, dname = droid_card_check(shot, btn)
+                        if verdict == "iconic":
+                            stop_traits(f"The {sd} droid is Iconic ({dname or 'Iconic'}) - "
+                                        "never rolling Iconics. Stopped.")
+                            return
+                        if verdict == "unsure":
+                            stop_traits(f"Couldn't tell if the {sd} droid is Iconic - "
+                                        "stopped to be safe")
+                            return
+                        info[sd]["checked"], info[sd]["droid"] = True, dname
+                    state["trait_droid"] = st["droid"]
                 click_at(settled[1]["cx"], settled[1]["cy"])
                 found = wait_for_menu(sct, "panel", 3)
                 if not found and traits_active():
