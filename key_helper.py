@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -133,11 +133,11 @@ DEFAULTS = {
     "overlay": True,            # show the on-screen info box
     "hide_when_paused": True,   # hide the box while paused (it pops up briefly on changes)
     "overlay_x": 20,
-    "overlay_y": 120,
+    "overlay_y": None,          # None = just under the name/ID line at the top of the screen
     "mini_badge": True,         # small "running" badge in the top-left when idle
     "discreet": False,          # discreet mode: hide the idle badge (click the tray icon)
     "mini_x": 8,
-    "mini_y": 8,
+    "mini_y": None,
     "tray_icon": True,          # icon by the clock: right-click to update or quit
     "tesseract_path": r"C:\Program Files\Tesseract-OCR\tesseract.exe",
 }
@@ -170,6 +170,10 @@ def save_config():
 cfg = load_config()
 if cfg["allowed_keys"] == "EFZQ":  # older config files - the game added C
     cfg["allowed_keys"] = "EFZQC"
+if cfg.get("overlay_y") == 120:      # old default spot -> new spot under the name/ID line
+    cfg["overlay_y"] = None
+if cfg.get("mini_y") == 8:
+    cfg["mini_y"] = None
 _saved_hotkeys = cfg.get("hotkeys") if cfg.get("hotkeys") is not DEFAULTS["hotkeys"] else None
 _saved_hotkeys = dict(_saved_hotkeys or {})
 for _old, _new in (("faster", "reb_up"), ("slower", "reb_down")):     # renamed in 1.8
@@ -1079,7 +1083,7 @@ def could_be_wanted(tier):
 
 
 def wanted_summary():
-    parts = [f"{n} ({c if c in ('rainbow', 'diamond') else 'any'})"
+    parts = [f"{n} ({'rainbow' if n in ALWAYS_RAINBOW else c if c in ('rainbow', 'diamond') else 'any'})"
              for n, c in cfg["trait_wanted"].items() if c != "off"]
     return ", ".join(parts) or "nothing"
 
@@ -1550,6 +1554,31 @@ def record_roll(trait, tier, cost):
             json.dump(_stats, f)
     except Exception as e:
         print("Couldn't save trait stats:", e)
+
+
+def odds_data():
+    """Roll results for the app window: everyone's shared counts if there are more
+    of those, otherwise this PC's. {'who', 'n', 'counts': {trait: {tier: n}}}"""
+    global _stats
+    if _stats is None:
+        _stats = load_stats()
+    mine, everyone = {}, {}
+    for r in _stats["rolls"]:
+        if r.get("tier"):
+            t = mine.setdefault(r["trait"], {})
+            t[r["tier"]] = t.get(r["tier"], 0) + 1
+    for key, c in _shared["counts"].items():
+        if key in _KEY_TO_ROLL and _KEY_TO_ROLL[key][1]:
+            trait, tier = _KEY_TO_ROLL[key]
+            t = everyone.setdefault(trait, {})
+            t[tier] = t.get(tier, 0) + c
+    n_m = sum(sum(v.values()) for v in mine.values())
+    n_e = sum(sum(v.values()) for v in everyone.values())
+    who, counts, n = ("everyone", everyone, n_e) if n_e >= n_m else ("you", mine, n_m)
+    times = state["roll_times"]
+    gaps = sorted(b - a for a, b in zip(times, times[1:]) if 0 < b - a < 60)
+    return {"who": who, "n": n, "counts": counts,
+            "per_roll": gaps[len(gaps) // 2] if gaps else None}
 
 
 def stats_summary():
@@ -3032,13 +3061,35 @@ def select_area(root):
     force_focus(win)
 
 
+def overlay_pos(view, mon):
+    """Screen position of the overlay ('full') or the idle badge ('mini'): top-left,
+    just under the player name / ID line (about 3% down the screen)."""
+    kx, ky = ("overlay_x", "overlay_y") if view == "full" else ("mini_x", "mini_y")
+    y = cfg.get(ky)
+    if y is None:
+        y = max(24, int(mon["height"] * 0.032))
+    return mon["left"] + int(cfg.get(kx) or 0), mon["top"] + int(y)
+
+
+def overlay_hints():
+    """Only the hotkeys that matter right now."""
+    m = hk_label("menu")
+    if state["enabled"]:
+        if state["mode"] == "fishing":
+            return f"{m} stop \u00b7 {hk_label('snapshot')} save debug pictures"
+        return f"{m} stop"
+    return (f"{m} menu \u00b7 {hk_label('reb_up')}/{hk_label('reb_down')} rebirth +/\u2212 \u00b7 "
+            f"{hk_label('inv_add')}/{hk_label('inv_remove')} add/remove droid\n"
+            f"{hk_label('area')} scan area \u00b7 {hk_label('quit')} quit")
+
+
 def run_windows():
     root = tk.Tk()
     root.overrideredirect(True)
     root.attributes("-topmost", True)
     root.attributes("-alpha", 0.88)
     root.configure(bg=BG)
-    root.geometry(f"+{screen()['left'] + cfg['overlay_x']}+{screen()['top'] + cfg['overlay_y']}")
+    root.geometry("+{}+{}".format(*overlay_pos("full", screen())))
 
     frame = tk.Frame(root, bg=BG, padx=14, pady=10,
                      highlightthickness=1, highlightbackground="#2b3038")
@@ -3145,15 +3196,13 @@ def run_windows():
                 title.config(text="DROID TYCOON HELPER \u2013 STOPPED", fg=AMBER)
             stats.config(fg=DIM, font=("Segoe UI", 10))
             if state["mode"] == "traits":
-                reading.config(text=f"Trait: {state['trait'] or DASH}")
-                spent = f" \u00b7 spent {format_amount(state['spent'])}" if state["spent"] else ""
                 droid = state["trait_side"].title() + (
                     f" ({state.get('trait_droid')})" if state.get("trait_droid") else "")
-                pressed.config(text=f"{droid} droid \u00b7 Rolls: {state['rolls']}{spent} \u00b7 "
-                                    f"{state['status'] or DASH}")
-                limit = cfg["max_cost"] if cfg["max_cost"] != "off" else "no limit"
-                stats.config(text=f"Stops on: {wanted_summary()} \u00b7 cost limit {limit}\n"
-                                  + stats_summary(), wraplength=440)
+                reading.config(text=f"Trait: {state['trait'] or DASH}")
+                pressed.config(text=f"{droid} droid \u00b7 roll {state['rolls']}")
+                limit = cfg["max_cost"] if cfg["max_cost"] != "off" else "none"
+                stats.config(text=f"Rolling for: {wanted_summary()}\nCost limit: {limit}",
+                             wraplength=440)
             elif state["mode"] == "clicker":
                 where = (f"only while {cfg['clicker_window']} is in front"
                          if cfg["clicker_window"] else "anywhere")
@@ -3177,10 +3226,7 @@ def run_windows():
                                   f"Scan {state['scan_ms']} ms \u00b7 "
                                   f"Delay {int(cfg['press_delay'] * 1000)} ms \u00b7 "
                                   f"Inputs {state['inputs']} \u00b7 Area {area}", wraplength=440)
-            hints.config(text=f"{hk_label('menu')} menu/start/stop \u00b7 "
-                              f"{hk_label('reb_up')}/{hk_label('reb_down')} rebirth +/\u2212\n"
-                              f"{hk_label('inv_add')}/{hk_label('inv_remove')} add/remove droid "
-                              f"\u00b7 {hk_label('area')} set area \u00b7 {hk_label('quit')} quit")
+            hints.config(text=overlay_hints())
         message.config(text=state["error"] or state["message"],
                        fg=RED if state["error"] else DIM)
         # small inventory box (F9/F10)
@@ -3190,7 +3236,8 @@ def run_windows():
             invtext.config(text="\n".join(state["inv_lines"]), fg=state["inv_color"] or FG)
             if not inv_shown[0]:
                 mon = screen()
-                invwin.geometry(f"+{mon['left'] + cfg['mini_x']}+{mon['top'] + cfg['mini_y'] + 34}")
+                mx, my = overlay_pos("mini", mon)
+                invwin.geometry(f"+{mx}+{my + 34}")
                 invwin.deiconify()
                 make_click_through(invwin)
             invwin.attributes("-topmost", True)
@@ -3219,8 +3266,7 @@ def run_windows():
             shown[0] = view
         if view != "none":                       # keep the boxes on the watched screen
             mon = screen()
-            ox, oy = (("overlay_x", "overlay_y") if view == "full" else ("mini_x", "mini_y"))
-            pos = f"+{mon['left'] + cfg[ox]}+{mon['top'] + cfg[oy]}"
+            pos = "+{}+{}".format(*overlay_pos(view, mon))
             if pos != placed[0]:
                 root.geometry(pos)
                 placed[0] = pos
@@ -3702,6 +3748,7 @@ def panel_state():
             "droids": cfg["trait_droids"], "max_cost": cfg["max_cost"], "cost_steps": COST_STEPS,
             "roll_wait": cfg["roll_wait"], "max_rolls": cfg["max_rolls"],
             "stop_if_unreadable": cfg["stop_if_unreadable"], "odds": odds,
+            "odds_data": odds_data(),
         },
         "clicker": {
             "kind": cfg["clicker_kind"], "cps": cfg["clicker_cps"],
@@ -4456,6 +4503,7 @@ def start_panel_server():
     srv.daemon_threads = True
     _panel.update(port=srv.server_address[1], token=token)
     threading.Thread(target=build_picture_index, daemon=True).start()
+    fetch_shared()                               # trait odds for the app window
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     print("App window page on port", _panel["port"])
     return srv

@@ -139,6 +139,14 @@ button{cursor:pointer}
 .sys .trow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);min-width:0}
 .sys .trow .tn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sys .trow .tn small{color:var(--muted);font-size:.72rem;margin-left:4px}
+.sys .trow .tp{font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-left:auto;margin-right:8px;white-space:nowrap}
+.sys .trow.want .tp{color:var(--accent)}
+.sys .odds{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-bottom:4px}
+.sys .odds .o{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:1px;min-width:0}
+.sys .odds .o b{font-family:var(--mono);font-size:1.05rem;color:var(--fg)}
+.sys .odds .o span{font-size:.74rem;color:var(--muted)}
+.sys .odds .o.hi b{color:var(--accent)}
+.sys .odds-foot{grid-column:1/-1;font-size:.74rem;color:var(--muted)}
 .sys .trow.want .tn{color:var(--fg);font-weight:700}
 .sys .trow:not(.want) .tn{color:var(--muted)}
 .sys .hk{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:7px 12px;align-items:center}
@@ -533,7 +541,6 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
                   <dt>Spent</dt><dd class="mono" id="t-spent">–</dd>
                   <dt>Doing</dt><dd id="t-status">–</dd>
                 </dl>
-                <div class="pre" id="t-odds"></div>
               </div>
               <div class="card">
                 <h3>Options</h3>
@@ -552,6 +559,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
             </div>
             <div class="card">
               <h3>Stop on these traits <span class="sub" id="t-sum"></span></h3>
+              <div class="odds" id="t-oddsbox"></div>
               <div class="traits" id="t-list"></div>
             </div>
           </div>
@@ -1768,11 +1776,11 @@ function buildTraits(){
   $("t-list").innerHTML=Object.keys(t.wanted).map(n=>{const rb=t.always_rainbow.includes(n);
     const opts=rb?[["off","Off"],["rainbow","Rainbow"]]:[["off","Off"],["any","Any"],["diamond","Diamond+"],["rainbow","Rainbow"]];
     return `<div class="trow" data-n="${esc2(n)}" data-rb="${rb?1:0}"><span class="tn" title="${esc2(n)}">${esc2(n)}${rb?"<small>only comes in rainbow</small>":""}</span>
-      <div class="seg sm" role="group" aria-label="${esc2(n)}">${opts.map(([v,l])=>`<button type="button" data-v="${v}" title="${v==="diamond"?"Diamond or Rainbow":""}">${l}</button>`).join("")}</div></div>`}).join("");
+      <span class="tp" title="Chance per roll at this setting"></span><div class="seg sm" role="group" aria-label="${esc2(n)}">${opts.map(([v,l])=>`<button type="button" data-v="${v}" title="${v==="diamond"?"Diamond or Rainbow":""}">${l}</button>`).join("")}</div></div>`}).join("");
   $("t-list").querySelectorAll(".trow").forEach(r=>{
     r.querySelector(".seg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
       touched["tw-"+r.dataset.n]=Date.now();r.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
-      r.classList.toggle("want",b.dataset.v!=="off");setting("trait_wanted",{[r.dataset.n]:b.dataset.v})});
+      r.classList.toggle("want",b.dataset.v!=="off");setting("trait_wanted",{[r.dataset.n]:b.dataset.v});renderOdds()});
   });
   $("t-maxcost").innerHTML=t.cost_steps.map(c=>`<option value="${esc2(c)}">${c==="off"?"No limit":esc2(c)}</option>`).join("");
 }
@@ -1787,7 +1795,7 @@ function renderTraits(){
   txt("t-run",on?"running":"stopped");
   txt("t-droid",t.side?(t.side[0].toUpperCase()+t.side.slice(1))+" droid"+(t.droid?" ("+t.droid+")":""):"–");
   txt("t-trait",t.trait);txt("t-rolls",t.rolls);txt("t-cost",t.cost);txt("t-spent",t.spent);txt("t-status",on?t.status:"–");
-  txt("t-odds",t.odds);
+
   if(!busy("t-droids"))seg("t-droids",t.droids);
   val("t-maxcost",t.max_cost);val("t-wait",t.roll_wait);val("t-maxrolls",t.max_rolls);chk("t-unread",t.stop_if_unreadable);
   let n=0;
@@ -1795,6 +1803,41 @@ function renderTraits(){
     if(Date.now()-(touched["tw-"+r.dataset.n]||0)<1500)return;
     r.classList.toggle("want",v!=="off");r.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.v===v)))});
   txt("t-sum",n?`${n} on`:"none on – pick at least one");
+  renderOdds();
+}
+/* chance per roll for what's picked right now (works before Start too) */
+const TIER_OK={any:["default","gold","diamond","rainbow"],diamond:["diamond","rainbow"],rainbow:["rainbow"],off:[]};
+function pickedNow(name){
+  const r=$("t-list").querySelector(`.trow[data-n="${CSS.escape(name)}"]`);
+  const b=r&&r.querySelector('button[aria-pressed="true"]');
+  return b?b.dataset.v:(S.traits.wanted[name]||"off");
+}
+function fmtDur(sec){if(!isFinite(sec))return"–";if(sec<90)return Math.round(sec)+" s";if(sec<5400)return Math.round(sec/60)+" min";return (sec/3600).toFixed(1)+" h"}
+let oddsKey="";
+function renderOdds(){
+  const od=S.traits.odds_data||{n:0,counts:{}}, n=od.n||0;
+  const picks=Object.keys(S.traits.wanted).map(nm=>[nm,pickedNow(nm)]);
+  const key=JSON.stringify([n,picks,od.per_roll,S.traits.droids,S.traits.roll_wait]);
+  if(key===oddsKey)return; oddsKey=key;
+  const share=(nm,v)=>{const c=od.counts[nm]||{};return n?TIER_OK[v].reduce((a,t)=>a+(c[t]||0),0)/n:0};
+  let p=0;
+  $("t-list").querySelectorAll(".trow").forEach(r=>{
+    const v=pickedNow(r.dataset.n), el=r.querySelector(".tp");
+    const pv=share(r.dataset.n,v==="off"?(r.dataset.rb==="1"?"rainbow":"any"):v);
+    if(v!=="off")p+=pv;
+    el.textContent=n>=20?(pv*100<0.1&&pv>0?"<0.1%":(pv*100).toFixed(pv<0.1?1:0)+"%"):"";
+  });
+  const tiers={default:0,gold:0,diamond:0,rainbow:0};
+  Object.values(od.counts).forEach(c=>Object.entries(c).forEach(([t,k])=>{if(t in tiers)tiers[t]+=k}));
+  const both=S.traits.droids==="both";
+  const per=od.per_roll||(both?(S.traits.roll_wait+4)/2:S.traits.roll_wait+3);
+  const box=$("t-oddsbox");
+  if(n<20){box.innerHTML=`<div class="odds-foot">Odds show here once there's roll data (${n} roll${n===1?"":"s"} so far). Everyone's rolls are shared, so this fills in quickly.</div>`;return}
+  const exp=p>0?1/p:Infinity;
+  box.innerHTML=`<div class="o hi"><span>Chance per roll</span><b>${p>0?(p*100).toFixed(p<0.1?1:0)+"%":"–"}</b><span>${p>0?"about 1 in "+Math.round(exp):"pick a trait"}</span></div>
+    <div class="o"><span>Expected</span><b>${p>0?"~"+Math.round(exp)+" rolls":"–"}</b><span>${p>0?"about "+fmtDur(exp*per)+(both?" with Both":""):""}</span></div>
+    <div class="o"><span>Half the time within</span><b>${p>0?Math.max(1,Math.round(Math.log(0.5)/Math.log(1-Math.min(p,0.999))))+" rolls":"–"}</b><span>9 in 10 within ${p>0?Math.max(1,Math.round(Math.log(0.1)/Math.log(1-Math.min(p,0.999)))):"–"}</span></div>
+    <div class="odds-foot">Tiers: Default ${(tiers.default/n*100).toFixed(0)}% · Gold ${(tiers.gold/n*100).toFixed(0)}% · Diamond ${(tiers.diamond/n*100).toFixed(0)}% · Rainbow ${(tiers.rainbow/n*100).toFixed(1)}% — from ${n.toLocaleString()} rolls by ${od.who==="everyone"?"everyone using the app":"you"}${od.per_roll?` · your rolls take ~${od.per_roll.toFixed(1)} s each`:""}.</div>`;
 }
 
 /* ---------- clicker ---------- */
