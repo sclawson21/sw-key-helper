@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.8.3"
+VERSION = "1.8.6"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -128,6 +128,7 @@ DEFAULTS = {
     "website_url": "",          # your LMS Droid Tycoon website address
     "open_window_on_start": True,
     "panel_height": 360,
+    "show_rebirth": True,       # next rebirth's credits and droids under the badge while idle
     # --- Overlay ---
     "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
     "overlay": True,            # show the on-screen info box
@@ -303,7 +304,12 @@ TRAIT_WORDS = {
     "Fusion Preservation": ["FUSION PRESERVATION", "DROID KEPT", "TRAIT LOCKS"],
     "Golden Splash Refill": ["GOLDEN SPLASH", "HITTING DEPOT"],
 }
-TRAIT_NAMES = list(TRAIT_WORDS)
+# display order (app window and in-game picker): rainbow-only traits first, then the
+# chip / scrap / fusion / mission ones, then the rest
+TRAIT_ORDER = ["Overclocked", "Chip Finder", "Fusion Preservation", "Passive Credits",
+               "Golden Splash Refill", "Upgrade Chip Bonus", "Scrap Specialist", "Pickaxe Level",
+               "Fusion Expert", "Mission Efficiency"]
+TRAIT_NAMES = TRAIT_ORDER + [n for n in TRAIT_WORDS if n not in TRAIT_ORDER]
 # these only ever come in rainbow, so an unreadable non-rainbow trait can't be one
 ALWAYS_RAINBOW = {"Overclocked", "Chip Finder", "Passive Credits",
                   "Fusion Preservation", "Golden Splash Refill"}
@@ -3074,6 +3080,93 @@ def select_area(root):
     force_focus(win)
 
 
+# ---------------------------------------------------- next rebirth (overlay) ---
+# Same rebirth list as the LMS Droid Tycoon website: per cycle, 40 levels of
+# "Droid tier,Droid tier,Droid tier" (b g d r s x t k = Basic..Kyber).
+REBIRTH_CYCLES = [
+    "CB b,Pit b,DRK-1 Probe b|BDX Explorer b,2BB b,Bal-Core b|A-LT b,BU-4D b,R9 g|ARG g,B1 Security g,Groundmech b|BU-4D g,HOV-R g,R9 d|A-LT d,ARG d,Groundmech g|BU-4D d,B1 Security d,BB g|HOV-R d,LO g,Util-Tec g|TRAK-R g,R6 g,Groundmech r|Strike-Orb g,Haul-R r,LO r|AMP Walker r,B1 Heavy r,BB9 b|Proto-Roller g,Mecha-Droid b,Mono-WLKR b|R7 b,Cyclo-Grav b,B2-RP b|Opti-STRK b,Mono-WLKR g,Mecha-Droid g|B2-RP g,BB9 g,R7 g|Opti-STRK g,Mono-WLKR d,Proto-Roller d|B2-RP d,Cyclo-Grav d,Mecha-Droid d|BB9 d,R7 d,Mono-WLKR r|B2-RP r,Cyclo-Grav r,Proto-Roller r|R7 r,Opti-STRK r,Mecha-Droid r|BB s,ORB-Walker s,Groundmech s|AMP Walker s,B1 Heavy s,Proto-Roller s|Opti-STRK s,Mono-WLKR s,R7 s|BB9 s,Cyclo-Grav s,MO-TRAK b|B2-RP s,IG b,DRFT-R g|CYCLENS g,Loadlifter d,RIC-1200 r|KX d,TRI-TEK r,Snow Mouse s|Proto-Roller x,MO-TRAK r,DRFT-R s|Mono-WLKR x,Mecha-Droid x,IG s|B2-RP x,CYCLENS s,Loadlifter x|SEN-TRI t,Proto-Roller s,KX s|ORB-Walker x,Opti-Pod x,RIC s|B1 Heavy t,Cyclo-Grav x,DRFT-R x|Groundmech t,BB t,CYCLENS x|BB9 t,IG t,Snow Mouse t|BDX Explorer k,2BB k,A-LT k|B1 Heavy k,Groundmech k,BB k|R2 k,R6 k,BB9 k|R7 k,Proto-Roller k,IG k|Snow Mouse k,DRFT-R k,CYCLENS k",
+    "ID10 b,Mouse b,Gonk b|ROLL-R b,Senate Hovercam b,NAV-EX b|R4 b,VECT-Arm b,BDX Explorer g|2BB g,Bal-Core g,ORB-Walker b|R4 g,VECT-Arm g,NAV-EX g|Gunrunner b,2BB d,Bal-Core d|ROLL-R d,BDX Explorer d,R2 g|R4 d,B2 Super g,Gunrunner g|NAV-EX r,Strike-Orb g,AMP Walker g|VECT-Arm r,R2 d,B2 Super d|Bal-Core r,Strike-Orb d,B2 Heavy d|ORB-Walker r,R2 r,BB9 b|B2 Super r,Mecha-Droid b,Proto-Roller b|B2 Heavy r,B2-RP b,R7 g|Strike-Orb r,BB9 g,Proto-Roller g|AMP Walker r,Mecha-Droid g,B2-RP d|Opti-Pod r,Mono-WLKR g,R7 d|Util-Tec r,BB9 d,Proto-Roller d|Mecha-Droid d,R7 r,B2-RP r|Mono-WLKR r,Opti-STRK r,Cyclo-Grav r|LO s,R6 s,Haul-R s|SEN-TRI s,Strike-Orb s,Proto-Roller s|BB9 s,Cyclo-Grav s,B2-RP s|Opti-STRK s,B2-RP s,Snow Mouse b|Mono-WLKR s,TRI-TEK g,RIC-1200 b|KX g,DRFT-R d,IG r|LEP d,Loadlifter r,MO-TRAK s|Mecha-Droid x,Snow Mouse r,TRI-TEK s|Cyclo-Grav x,R7 x,RIC s|Opti-STRK x,KX s,DRFT-R x|B2 Super t,B2-RP s,Loadlifter s|Gunrunner x,B1 Heavy x,LEP s|R2 t,Opti-STRK x,KX x|R6 t,LO t,RIC x|R7 t,DRFT-R t,CYCLENS t|B1 Security k,R4 k,R9 k|LO k,TRAK-R k,ORB-Walker k|B2 Super k,B2 Heavy k,B2-RP k|Mecha-Droid k,Cyclo-Grav k,KX k|RIC k,Loadlifter k,LEP k",
+    "Mouse b,Pit b,Gonk b|R3 b,2BB b,Senate Hovercam b|R8 b,R5 b,R4 b|B1 Battle g,R9 g,B1 Security g|R3 g,2BB g,Senate Hovercam g|R5 d,R4 d,BDX Explorer d|R8 d,B1 Battle d,R9 d|R3 r,2BB r,B1 Security r|R5 r,R4 r,BDX Explorer r|Senate Hovercam r,Groundmech b,TRAK-R b|B2 Heavy b,B2 Super b,Util-Tec b|Bal-Core r,Groundmech g,TRAK-R g|B2 Super r,Mecha-Droid b,Proto-Roller b|B2 Heavy r,B2-RP b,R7 g|Strike-Orb r,BB9 g,Proto-Roller g|AMP Walker r,Mecha-Droid g,B2-RP d|Opti-Pod r,Mono-WLKR g,R7 d|Util-Tec r,BB9 d,Proto-Roller d|Mecha-Droid d,R7 r,B2-RP r|Mono-WLKR r,Opti-STRK r,Cyclo-Grav r|B2 Super s,Opti-Pod s,R2 s|Gunrunner s,LNG-Shot s,B2-RP s|Mono-WLKR s,Cyclo-Grav s,Mecha-Droid s|BB9 s,B2-RP s,RIC b|Proto-Roller s,Loadlifter b,MO-TRAK g|LEP g,TRI-TEK d,Snow Mouse r|RIC-1200 d,IG r,DRFT-R s|BB9 x,RIC r,MO-TRAK s|Mecha-Droid x,Opti-STRK x,IG s|R7 x,LEP s,DRFT-R x|B2 Heavy t,Mecha-Droid s,RIC-1200 s|Groundmech x,BB x,MO-TRAK s|TRAK-R t,Mono-WLKR x,Loadlifter x|ORB-Walker t,B2 Super t,LEP x|Proto-Roller t,KX t,RIC t|ARG k,Senate Hovercam k,BU-4D k|Strike-Orb k,AMP Walker k,Util-Tec k|Haul-R k,LNG-Shot k,Opti-STRK k|Mono-WLKR k,BB9 k,RIC-1200 k|MO-TRAK k,TRI-TEK k,IG k",
+    "ID10 b,Pit b,DRK-1 Probe b|R3 b,2BB b,Senate Hovercam b|R5 g,R8 g,R4 b|B1 Battle g,R9 g,B1 Security g|R3 g,2BB g,Senate Hovercam g|R5 d,R4 d,BDX Explorer d|R8 d,B1 Battle d,R9 d|R3 r,B1 Security r,2BB r|R5 r,R4 r,BDX Explorer r|Senate Hovercam r,Groundmech b,TRAK-R b|B2 Heavy b,B2 Super b,Util-Tec b|Bal-Core r,Groundmech g,TRAK-R g|B2 Super r,Mecha-Droid b,Proto-Roller b|Bal-Core d,Groundmech d,TRAK-R r|B2 Heavy d,B2 Super r,B2-RP b|Util-Tec r,BB9 b,R7 g|Opti-STRK b,Cyclo-Grav g,Mecha-Droid g|B2-RP g,BB9 g,R7 d|Mecha-Droid d,R7 r,B2-RP r|Mono-WLKR r,Opti-STRK r,Cyclo-Grav r|AMP Walker s,Groundmech s,Haul-R s|Gunrunner s,Strike-Orb s,B2 Super s|Mono-WLKR s,Cyclo-Grav s,B2-RP s|Mecha-Droid s,Proto-Roller s,MO-TRAK b|Opti-STRK s,TRI-TEK b,DRFT-R g|CYCLENS g,LEP d,MO-TRAK r|RIC-1200 d,Snow Mouse r,Loadlifter s|Opti-STRK x,IG r,KX s|BB9 x,R7 x,TRI-TEK s|Mono-WLKR x,CYCLENS s,IG x|TRAK-R t,Cyclo-Grav s,TRI-TEK s|R2 x,R6 x,IG s|B2 Heavy t,BB9 x,RIC-1200 x|Strike-Orb t,AMP Walker t,MO-TRAK x|B2-RP t,Loadlifter t,LEP t|NAV-EX k,Bal-Core k,VECT-Arm k|SEN-TRI k,Opti-Pod k,Gunrunner k|B1 Heavy k,Groundmech k,R7 k|Proto-Roller k,B2-RP k,Snow Mouse k|DRFT-R k,CYCLENS k,KX k",
+    "ID10 b,Mouse b,Gonk b|Imperial Probe g,2BB b,ROLL-R b|R4 b,VECT-Arm b,BDX Explorer g|B1 Battle g,R9 g,B1 Security g|R3 g,Bal-Core g,R4 g|2BB d,BDX Explorer d,Gunrunner b|R5 d,ROLL-R d,R2 g|R8 d,B1 Battle d,B2 Super g|NAV-EX r,Strike-Orb g,AMP Walker g|Imperial Probe s,Groundmech b,TRAK-R b|B2 Heavy b,B2 Super b,Util-Tec b|Bal-Core r,Groundmech g,TRAK-R g|B2 Super g,B2 Heavy g,R2 d|Groundmech d,TRAK-R d,Util-Tec r|B2 Heavy d,B2 Super d,B2-RP b|BB9 b,R7 g,Proto-Roller g|Opti-STRK b,Cyclo-Grav g,Mecha-Droid g|BB9 g,B2-RP g,R7 d|Opti-STRK d,Cyclo-Grav d,Mecha-Droid r|B2-RP r,BB9 r,R7 r|LO s,Strike-Orb s,Haul-R s|SEN-TRI s,R6 s,Gunrunner s|BB9 s,Cyclo-Grav s,B2-RP s|Mono-WLKR s,Opti-STRK s,MO-TRAK b|Mecha-Droid s,RIC b,TRI-TEK g|CYCLENS g,LEP d,Snow Mouse r|RIC-1200 d,IG r,Loadlifter s|BB9 x,RIC r,MO-TRAK s|Mecha-Droid x,Opti-STRK x,IG s|R7 x,LEP s,CYCLENS x|AMP Walker t,Opti-STRK s,Snow Mouse s|LO x,TRAK-R x,DRFT-R s|Util-Tec t,R7 x,TRI-TEK x|Haul-R t,LNG-Shot t,IG x|Mecha-Droid t,RIC-1200 t,MO-TRAK t|Mouse k,ROLL-R k,HOV-R k|BB k,R2 k,R6 k|LO k,TRAK-R k,Mecha-Droid k|Cyclo-Grav k,Opti-STRK k,RIC k|Loadlifter k,LEP k,RIC-1200 k",
+    "Gonk b,Mouse b,ID10 b|Pit b,EG-58 b,2BB b|R3 b,R4 b,ROLL-R b|EG-58 g,R9 g,B1 Security g|Gonk g,R5 g,VECT-Arm g|EGL b,EG-58 d,2BB d|KT b,R4 d,R9 d|MPH b,B1 Security d,NAV-EX d|Gonk d,EGL g,Strike-Orb g|Groundmech b,TRAK-R b,AMP Walker b|B2 Super b,Haul-R b,R2 b|Gonk r,Groundmech g,TRAK-R g|KT g,MPH g,Proto-Roller b|EGL d,B2 Super g,B2-RP b|JO9-4MN b,KT d,MPH d|PLNK b,BB9 b,R7 g|EGL r,JO9-4MN g,Mecha-Droid b|KT r,MPH r,PLNK g|JO9-4MN d,Proto-Roller g,R7 d|PLNK r,Mecha-Droid r,B2-RP r|Gonk s,EGL s,Haul-R s|KT s,Groundmech s,R2 s|MPH s,JO9-4MN s,BB9 s|PLNK s,Proto-Roller s,ECG b|R7 s,IG b,Loadlifter b|MO-TRAK g,ECG g,DRFT-R d|CYCLENS r,Snow Mouse r,TRI-TEK s|EGL x,JO9-4MN x,BB9 x|KT x,PLNK x,IG s|MPH x,B2-RP x,DRFT-R x|EGL t,EG-58 s,Snow Mouse s|ECG x,TRAK-R x,CYCLENS s|KT t,Cyclo-Grav x,TRI-TEK x|MPH t,Haul-R t,IG x|JO9-4MN t,PLNK t,ECG t|Gonk k,EG-58 k,ROLL-R k|EGL k,R2 k,B2 Super k|KT k,MPH k,Snow Mouse k|JO9-4MN k,Cyclo-Grav k,TRI-TEK k|PLNK k,ECG k,DRFT-R k",
+]
+REBIRTH_CREDITS = ["10K", "150K", "975K", "2.95M", "5.35M", "9.85M", "14.5M", "36M", "89M", "220M", "550M", "1.36B", "3.40B", "8.45B", "21B", "52B", "130B", "325B", "810B", "2T", "3T", "4.5T", "6T", "9T", "13.5T", "21T", "32T", "45T", "68T", "100T", "150T", "230T", "345T", "520T", "778T", "1.19Qa", "2.5Qa", "4.5Qa", "8Qa", "15Qa"]
+TIER_LETTERS = {"b": 0, "g": 1, "d": 2, "r": 3, "s": 4, "x": 5, "t": 6, "k": 7}
+TIER_NAMES = ["Basic", "Gold", "Diamond", "Rainbow", "Beskar", "Galactic", "Stellar", "Kyber", "Scourge"]
+_rb = {"info": None, "t": 0.0, "ver": None, "player": None, "error": ""}
+
+
+def _inv_tier(key):
+    m = re.match(r"\d+", str(key))
+    return int(m.group()) if m else -1
+
+
+def next_rebirth(fields):
+    """What the next rebirth needs, from a website player document."""
+    cycle = int(fields.get("cycle") or 1)
+    cycle = min(max(cycle, 1), len(REBIRTH_CYCLES))
+    done = set(int(x) for x in ((fields.get("done") or {}).get(str(cycle)) or []))
+    level = next((n for n in range(1, 41) if n not in done), None)
+    out = {"cycle": cycle, "level": level, "name": fields.get("name", "")}
+    if level is None:
+        return out
+    inv = fields.get("inv") or {}
+    needs = []
+    for part in REBIRTH_CYCLES[cycle - 1].split("|")[level - 1].split(","):
+        name, letter = part.rsplit(" ", 1)
+        tier = TIER_LETTERS[letter]
+        have = sum(c for k, c in (inv.get(name) or {}).items() if _inv_tier(k) >= tier and c > 0)
+        best = max((_inv_tier(k) for k, c in (inv.get(name) or {}).items() if c > 0), default=-1)
+        needs.append({"name": name, "tier": tier, "ok": have > 0, "best": best})
+    out.update(credits=REBIRTH_CREDITS[level - 1], needs=needs)
+    return out
+
+
+def rebirth_watch():
+    """Keep the next-rebirth info fresh for the overlay (every minute, and right away
+    after F9/F10, Page Up/Down or a change in the app)."""
+    while not state["quit"]:
+        time.sleep(1.5)
+        if not cfg.get("show_rebirth", True) or state["enabled"]:
+            continue
+        if not accounts_enabled() or not _account.get("refresh") or _account.get("offline"):
+            continue
+        ver, pl = state.get("data_version", 0), cfg.get("inventory_player")
+        if time.time() - _rb["t"] < 60 and ver == _rb["ver"] and pl == _rb["player"]:
+            continue
+        _rb.update(t=time.time(), ver=ver, player=pl)
+        try:
+            player = current_player()
+            if not player:
+                _rb["info"] = None
+                continue
+            doc = _http(_players_url(player["id"]), token=id_token())
+            _rb["info"] = next_rebirth({k: _fs_value(v) for k, v in doc.get("fields", {}).items()})
+            _rb["error"] = ""
+        except Exception as e:
+            _rb["error"] = str(e)
+            print("Couldn't load the next rebirth:", e)
+
+
+def rebirth_lines():
+    """[(text, colour)] for the overlay, or [] if there's nothing to show."""
+    info = _rb["info"]
+    if not info or not cfg.get("show_rebirth", True):
+        return []
+    who = f" \u00b7 {info['name']}" if info.get("name") and len(_players["list"]) > 1 else ""
+    if info["level"] is None:
+        return [(f"All 40 rebirths done (cycle {info['cycle']}){who} \u2013 time to Super Rebirth!", GREEN)]
+    lines = [(f"NEXT: REBIRTH {info['level']} \u00b7 {info['credits']} credits{who}", FG)]
+    for n in info["needs"]:
+        if n["ok"]:
+            lines.append((f"\u2714 {n['name']} \u2013 {TIER_NAMES[n['tier']]}", GREEN))
+        else:
+            have = f" (you have {TIER_NAMES[n['best']]})" if n["best"] >= 0 else ""
+            lines.append((f"\u2718 {n['name']} \u2013 {TIER_NAMES[n['tier']]}{have}", RED))
+    return lines
+
+
 def overlay_pos(view, mon):
     """Screen position of the overlay ('full') or the idle badge ('mini'): top-left,
     just under the player name / ID line (about 3% down the screen)."""
@@ -3124,11 +3217,43 @@ def run_windows():
 
     mini = tk.Frame(root, bg=BG, padx=8, pady=3,
                     highlightthickness=1, highlightbackground="#2b3038")
-    mini_dot = tk.Label(mini, bg=BG, fg=AMBER, font=("Segoe UI", 9, "bold"), text="\u25cf")
+    mini_row = tk.Frame(mini, bg=BG)
+    mini_row.pack(anchor="w")
+    mini_dot = tk.Label(mini_row, bg=BG, fg=AMBER, font=("Segoe UI", 9, "bold"), text="\u25cf")
     mini_dot.pack(side="left")
-    mini_text = tk.Label(mini, bg=BG, fg=DIM, font=("Segoe UI", 9),
+    mini_text = tk.Label(mini_row, bg=BG, fg=DIM, font=("Segoe UI", 9),
                          text=f"Droid Tycoon Helper v{VERSION} \u00b7 {hk_label('menu')} = menu")
     mini_text.pack(side="left", padx=(4, 0))
+
+    def rb_box(parent):
+        """Next rebirth: a heading and one line per droid (coloured)."""
+        box = tk.Frame(parent, bg=BG)
+        labels = [tk.Label(box, bg=BG, fg=FG, anchor="w", justify="left",
+                           font=("Segoe UI", 10, "bold" if i == 0 else "normal")) for i in range(4)]
+        return box, labels
+
+    mini_rb, mini_rb_labels = rb_box(mini)
+    full_rb, full_rb_labels = rb_box(frame)
+    rb_shown = {"mini": "", "full": ""}
+
+    def show_rb(where, box, labels, lines, after=None):
+        key = repr(lines)
+        if key == rb_shown[where]:
+            return
+        rb_shown[where] = key
+        if not lines:
+            box.pack_forget()
+            return
+        for i, lab in enumerate(labels):
+            if i < len(lines):
+                lab.config(text=lines[i][0], fg=lines[i][1])
+                lab.pack(anchor="w", fill="x")
+            else:
+                lab.pack_forget()
+        if after is not None:
+            box.pack(after=after, anchor="w", fill="x", pady=(4, 0))
+        else:
+            box.pack(anchor="w", fill="x", pady=(4, 0))
 
     make_click_through(root)
     shown = ["full"]
@@ -3260,7 +3385,8 @@ def run_windows():
         full = cfg["overlay"] and (
             not cfg["hide_when_paused"] or state["enabled"] or state["error"]
             or state["menu_open"] or time.time() < state["show_until"])
-        view = "full" if full else ("mini" if cfg["mini_badge"] and not cfg["discreet"]
+        rb_idle = cfg["overlay"] and not state["enabled"] and bool(rebirth_lines())
+        view = "full" if full else ("mini" if (cfg["mini_badge"] and not cfg["discreet"]) or rb_idle
                                     else "none")
         if state["capture_hide"]:
             view = "none"
@@ -3283,6 +3409,9 @@ def run_windows():
             if pos != placed[0]:
                 root.geometry(pos)
                 placed[0] = pos
+        idle_lines = [] if (state["enabled"] or state["menu_open"]) else rebirth_lines()
+        show_rb("mini", mini_rb, mini_rb_labels, idle_lines)
+        show_rb("full", full_rb, full_rb_labels, idle_lines, after=message)
         if view == "mini":
             mini_dot.config(fg=GREEN if state["enabled"] else (RED if state["error"] else AMBER))
         if view != "none":
@@ -3785,6 +3914,7 @@ def panel_state():
             "mini_badge": cfg["mini_badge"], "discreet": cfg["discreet"],
             "auto_update": cfg["auto_update"], "website_url": cfg["website_url"],
             "open_window_on_start": cfg["open_window_on_start"],
+            "show_rebirth": cfg.get("show_rebirth", True),
             "panel_height": cfg["panel_height"],
         },
         "account": {"username": _account.get("username", ""),
@@ -3806,7 +3936,7 @@ def panel_set(key, value):
     if key == "press_delay_ms":
         cfg["press_delay"] = round(_clamp_num(value, DELAY_MIN * 1000, DELAY_MAX * 1000) / 1000, 3)
     elif key in ("require_prompt", "stop_if_unreadable", "overlay", "hide_when_paused",
-                 "mini_badge", "discreet", "auto_update", "open_window_on_start"):
+                 "mini_badge", "discreet", "auto_update", "open_window_on_start", "show_rebirth"):
         cfg[key] = _as_bool(value)
     elif key == "trait_wanted":
         if not isinstance(value, dict):
@@ -4669,6 +4799,7 @@ def main():
         print(state["error"])
     listener = keyboard.Listener(on_press=on_key)
     listener.start()
+    threading.Thread(target=rebirth_watch, daemon=True).start()
     threading.Thread(target=scanner, daemon=True).start()
     try:
         start_panel_server()

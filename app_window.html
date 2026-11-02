@@ -134,8 +134,8 @@ button{cursor:pointer}
 .switch input:checked{background:var(--accent)}
 .switch input:checked::after{transform:translateX(14px);background:var(--accent-fg)}
 .switch span small{display:block;color:var(--muted);font-size:.76rem}
-.sys .traits{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 22px}
-@media (max-width:1000px){.sys .traits{grid-template-columns:minmax(0,1fr)}}
+.sys .traits{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:column;gap:4px 22px}
+@media (max-width:1000px){.sys .traits{grid-template-columns:minmax(0,1fr);grid-auto-flow:row;grid-template-rows:none!important}}
 .sys .trow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);min-width:0}
 .sys .trow .tn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sys .trow .tn small{color:var(--muted);font-size:.72rem;margin-left:4px}
@@ -638,6 +638,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
               <label class="switch"><input type="checkbox" id="s-hide"><span>Hide it while stopped<small>It still pops up briefly when something changes.</small></span></label>
               <label class="switch"><input type="checkbox" id="s-mini"><span>Small badge while idle</span></label>
               <label class="switch"><input type="checkbox" id="s-discreet"><span>Discreet mode<small>Hides the idle badge too.</small></span></label>
+              <label class="switch"><input type="checkbox" id="s-rebirth"><span>Show the next rebirth while idle<small>Credits and the 3 droids it needs, with ✔ for the ones you have. Hidden while Fishing, Traits or the clicker run.</small></span></label>
             </div>
             <div class="card">
               <h3>App</h3>
@@ -1782,6 +1783,7 @@ function buildTraits(){
       touched["tw-"+r.dataset.n]=Date.now();r.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
       r.classList.toggle("want",b.dataset.v!=="off");setting("trait_wanted",{[r.dataset.n]:b.dataset.v});renderOdds()});
   });
+  $("t-list").style.gridTemplateRows=`repeat(${Math.ceil(Object.keys(t.wanted).length/2)},auto)`;   // down the left column, then the right
   $("t-maxcost").innerHTML=t.cost_steps.map(c=>`<option value="${esc2(c)}">${c==="off"?"No limit":esc2(c)}</option>`).join("");
 }
 onSeg("t-droids",v=>setting("trait_droids",v,"t-droids"));
@@ -1886,7 +1888,7 @@ $("hk-reset").addEventListener("click",()=>action("reset_hotkeys").then(ok=>ok&&
 document.addEventListener("keydown",e=>{if(S&&S.capture){e.preventDefault()}},true);
 
 /* ---------- settings ---------- */
-[["s-openwin","open_window_on_start"],["s-overlay","overlay"],["s-hide","hide_when_paused"],["s-mini","mini_badge"],["s-discreet","discreet"],["s-auto","auto_update"]]
+[["s-rebirth","show_rebirth"],["s-openwin","open_window_on_start"],["s-overlay","overlay"],["s-hide","hide_when_paused"],["s-mini","mini_badge"],["s-discreet","discreet"],["s-auto","auto_update"]]
   .forEach(([id,key])=>$(id).addEventListener("change",e=>setting(key,e.target.checked,id)));
 $("s-check").addEventListener("click",()=>action("check_update").then(ok=>ok&&toast("Checking for updates…",true)));
 $("s-folder").addEventListener("click",()=>action("open_folder"));
@@ -1896,7 +1898,7 @@ $("s-quit").addEventListener("click",()=>{if(confirm("Quit Droid Tycoon Helper?"
 function renderSettings(){
   const s=S.settings;
   chk("s-openwin",s.open_window_on_start);chk("s-overlay",s.overlay);chk("s-hide",s.hide_when_paused);
-  chk("s-mini",s.mini_badge);chk("s-discreet",s.discreet);chk("s-auto",s.auto_update);
+  chk("s-mini",s.mini_badge);chk("s-rebirth",s.show_rebirth);chk("s-discreet",s.discreet);chk("s-auto",s.auto_update);
   txt("s-tray",S.tray); txt("s-pics",S.pictures||"Not looked up yet");
   const a=S.account;txt("s-acct",a.signed_in?`Signed in as ${a.username}${a.offline?" (offline)":""}. It's the same account as the website, so everything stays in sync.`:"Not signed in.");
 }
