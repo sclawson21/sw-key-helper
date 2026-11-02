@@ -70,7 +70,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.8.6"
+VERSION = "1.8.7"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -3229,7 +3229,7 @@ def run_windows():
         """Next rebirth: a heading and one line per droid (coloured)."""
         box = tk.Frame(parent, bg=BG)
         labels = [tk.Label(box, bg=BG, fg=FG, anchor="w", justify="left",
-                           font=("Segoe UI", 10, "bold" if i == 0 else "normal")) for i in range(4)]
+                           font=("Segoe UI", 10, "bold" if i == 0 else "normal")) for i in range(6)]
         return box, labels
 
     mini_rb, mini_rb_labels = rb_box(mini)
@@ -3259,20 +3259,6 @@ def run_windows():
     shown = ["full"]
     placed = [""]
 
-    invwin = tk.Toplevel(root)
-    invwin.overrideredirect(True)
-    invwin.attributes("-topmost", True)
-    invwin.attributes("-alpha", 0.92)
-    invwin.configure(bg=BG)
-    invbox = tk.Frame(invwin, bg=BG, padx=10, pady=6,
-                      highlightthickness=1, highlightbackground="#2b3038")
-    invbox.pack()
-    invtext = tk.Label(invbox, bg=BG, fg=FG, font=("Segoe UI", 10, "bold"),
-                       justify="left", anchor="w")
-    invtext.pack(fill="x")
-    invwin.withdraw()
-    make_click_through(invwin)
-    inv_shown = [False]
 
     def refresh():
         if state["quit"]:
@@ -3367,27 +3353,14 @@ def run_windows():
             hints.config(text=overlay_hints())
         message.config(text=state["error"] or state["message"],
                        fg=RED if state["error"] else DIM)
-        # small inventory box (F9/F10)
-        want_inv = (bool(state["inv_lines"]) and time.time() < state["inv_until"]
-                    and not state["capture_hide"])
-        if want_inv:
-            invtext.config(text="\n".join(state["inv_lines"]), fg=state["inv_color"] or FG)
-            if not inv_shown[0]:
-                mon = screen()
-                mx, my = overlay_pos("mini", mon)
-                invwin.geometry(f"+{mx}+{my + 34}")
-                invwin.deiconify()
-                make_click_through(invwin)
-            invwin.attributes("-topmost", True)
-        elif inv_shown[0]:
-            invwin.withdraw()
-        inv_shown[0] = want_inv
+        # F9/F10 droid box - shown inside the overlay (in place of the next-rebirth lines)
+        want_inv = bool(state["inv_lines"]) and time.time() < state["inv_until"]
         full = cfg["overlay"] and (
             not cfg["hide_when_paused"] or state["enabled"] or state["error"]
             or state["menu_open"] or time.time() < state["show_until"])
         rb_idle = cfg["overlay"] and not state["enabled"] and bool(rebirth_lines())
         view = "full" if full else ("mini" if (cfg["mini_badge"] and not cfg["discreet"]) or rb_idle
-                                    else "none")
+                                    or want_inv else "none")
         if state["capture_hide"]:
             view = "none"
         if view != shown[0]:
@@ -3409,7 +3382,12 @@ def run_windows():
             if pos != placed[0]:
                 root.geometry(pos)
                 placed[0] = pos
-        idle_lines = [] if (state["enabled"] or state["menu_open"]) else rebirth_lines()
+        if want_inv:
+            col = state["inv_color"] or FG
+            idle_lines = [(t, col if i == 0 or state["inv_color"] else (DIM if t.startswith("Wrong?") else FG))
+                          for i, t in enumerate(state["inv_lines"][:6])]
+        else:
+            idle_lines = [] if (state["enabled"] or state["menu_open"]) else rebirth_lines()
         show_rb("mini", mini_rb, mini_rb_labels, idle_lines)
         show_rb("full", full_rb, full_rb_labels, idle_lines, after=message)
         if view == "mini":
