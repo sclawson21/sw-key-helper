@@ -635,6 +635,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
             <div class="card">
               <h3>In-game overlay</h3>
               <label class="switch"><input type="checkbox" id="s-overlay"><span>Show the overlay box</span></label>
+              <label class="switch"><input type="checkbox" id="s-outside"><span>Only while Fortnite is in front<small>Hides the overlay when you switch to this window, a browser or anything else.</small></span></label>
               <label class="switch"><input type="checkbox" id="s-hide"><span>Hide it while stopped<small>It still pops up briefly when something changes.</small></span></label>
               <label class="switch"><input type="checkbox" id="s-mini"><span>Small badge while idle</span></label>
               <label class="switch"><input type="checkbox" id="s-discreet"><span>Discreet mode<small>Hides the idle badge too.</small></span></label>
@@ -1888,7 +1889,7 @@ $("hk-reset").addEventListener("click",()=>action("reset_hotkeys").then(ok=>ok&&
 document.addEventListener("keydown",e=>{if(S&&S.capture){e.preventDefault()}},true);
 
 /* ---------- settings ---------- */
-[["s-rebirth","show_rebirth"],["s-openwin","open_window_on_start"],["s-overlay","overlay"],["s-hide","hide_when_paused"],["s-mini","mini_badge"],["s-discreet","discreet"],["s-auto","auto_update"]]
+[["s-outside","hide_outside_game"],["s-rebirth","show_rebirth"],["s-openwin","open_window_on_start"],["s-overlay","overlay"],["s-hide","hide_when_paused"],["s-mini","mini_badge"],["s-discreet","discreet"],["s-auto","auto_update"]]
   .forEach(([id,key])=>$(id).addEventListener("change",e=>setting(key,e.target.checked,id)));
 $("s-check").addEventListener("click",()=>action("check_update").then(ok=>ok&&toast("Checking for updates…",true)));
 $("s-folder").addEventListener("click",()=>action("open_folder"));
@@ -1898,7 +1899,7 @@ $("s-quit").addEventListener("click",()=>{if(confirm("Quit Droid Tycoon Helper?"
 function renderSettings(){
   const s=S.settings;
   chk("s-openwin",s.open_window_on_start);chk("s-overlay",s.overlay);chk("s-hide",s.hide_when_paused);
-  chk("s-mini",s.mini_badge);chk("s-rebirth",s.show_rebirth);chk("s-discreet",s.discreet);chk("s-auto",s.auto_update);
+  chk("s-mini",s.mini_badge);chk("s-rebirth",s.show_rebirth);chk("s-outside",s.hide_outside_game);chk("s-discreet",s.discreet);chk("s-auto",s.auto_update);
   txt("s-tray",S.tray); txt("s-pics",S.pictures||"Not looked up yet");
   const a=S.account;txt("s-acct",a.signed_in?`Signed in as ${a.username}${a.offline?" (offline)":""}. It's the same account as the website, so everything stays in sync.`:"Not signed in.");
 }

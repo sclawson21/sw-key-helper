@@ -90,7 +90,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.8.8"
+VERSION = "1.8.9"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -148,7 +148,8 @@ DEFAULTS = {
     "website_url": "",          # your LMS Droid Tycoon website address
     "open_window_on_start": True,
     "panel_height": 360,
-    "show_rebirth": True,       # next rebirth's credits and droids under the badge while idle
+    "show_rebirth": True,
+    "hide_outside_game": True,  # hide the overlay while another window is in front       # next rebirth's credits and droids under the badge while idle
     # --- Overlay ---
     "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
     "overlay": True,            # show the on-screen info box
@@ -3050,6 +3051,7 @@ def force_focus(win):
 def select_area(root):
     """Full-screen see-through layer: drag a box with the mouse."""
     m = screen()
+    state["area_open"] = True
     win = tk.Toplevel(root)
     win.overrideredirect(True)
     win.geometry(f"{m['width']}x{m['height']}+{m['left']}+{m['top']}")
@@ -3063,6 +3065,7 @@ def select_area(root):
     drag = {"x": 0, "y": 0, "rect": None}
 
     def close(_=None):
+        state["area_open"] = False
         win.destroy()
 
     def down(e):
@@ -3185,6 +3188,20 @@ def rebirth_lines():
             have = f" (you have {TIER_NAMES[n['best']]})" if n["best"] >= 0 else ""
             lines.append((f"\u2718 {n['name']} \u2013 {TIER_NAMES[n['tier']]}{have}", RED))
     return lines
+
+
+_front = {"t": 0.0, "game": True}
+
+
+def game_in_front():
+    """Is Fortnite the window in front? (checked at most 4x a second)"""
+    if sys.platform != "win32" or not cfg.get("hide_outside_game", True):
+        return True
+    now = time.time()
+    if now - _front["t"] > 0.25:
+        _front["t"] = now
+        _front["game"] = "fortnite" in foreground_title().lower()
+    return _front["game"]
 
 
 def overlay_pos(view, mon):
@@ -3381,6 +3398,8 @@ def run_windows():
         rb_idle = cfg["overlay"] and not state["enabled"] and bool(rebirth_lines())
         view = "full" if full else ("mini" if (cfg["mini_badge"] and not cfg["discreet"]) or rb_idle
                                     or want_inv else "none")
+        if not game_in_front() and not state.get("area_open"):
+            view = "none"                        # another window is in front - stay out of the way
         if state["capture_hide"]:
             view = "none"
         if view != shown[0]:
@@ -3913,6 +3932,7 @@ def panel_state():
             "auto_update": cfg["auto_update"], "website_url": cfg["website_url"],
             "open_window_on_start": cfg["open_window_on_start"],
             "show_rebirth": cfg.get("show_rebirth", True),
+            "hide_outside_game": cfg.get("hide_outside_game", True),
             "panel_height": cfg["panel_height"],
         },
         "account": {"username": _account.get("username", ""),
@@ -3934,7 +3954,8 @@ def panel_set(key, value):
     if key == "press_delay_ms":
         cfg["press_delay"] = round(_clamp_num(value, DELAY_MIN * 1000, DELAY_MAX * 1000) / 1000, 3)
     elif key in ("require_prompt", "stop_if_unreadable", "overlay", "hide_when_paused",
-                 "mini_badge", "discreet", "auto_update", "open_window_on_start", "show_rebirth"):
+                 "mini_badge", "discreet", "auto_update", "open_window_on_start", "show_rebirth",
+                 "hide_outside_game"):
         cfg[key] = _as_bool(value)
     elif key == "trait_wanted":
         if not isinstance(value, dict):
