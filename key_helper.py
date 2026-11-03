@@ -66,6 +66,47 @@ def _use_windows_certificates():
 
 CERT_SOURCE = _use_windows_certificates()
 
+
+def web_get(url, headers=None, timeout=20, dest=None):
+    """Download a URL (bytes, or into the file dest). If Python can't verify the
+    site's certificate, Windows does the download instead (like a browser would)."""
+    import urllib.request
+    headers = {"User-Agent": "Droid-Tycoon-Helper", **(headers or {})}
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            if dest is None:
+                return r.read()
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            return None
+    except Exception as e:
+        if "CERTIFICATE_VERIFY_FAILED" not in str(e) or sys.platform != "win32":
+            raise
+        print("Python couldn't check the certificate - downloading through Windows:", url)
+    out = dest or os.path.join(BASE_DIR, "download.tmp")
+    env = dict(os.environ, DTH_URL=url, DTH_OUT=out,
+               DTH_ACCEPT=headers.get("Accept", "*/*"), DTH_UA=headers["User-Agent"])
+    ps = ("$ProgressPreference='SilentlyContinue';"
+          "[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072;"
+          "Invoke-WebRequest -UseBasicParsing -Uri $env:DTH_URL -OutFile $env:DTH_OUT "
+          "-Headers @{'User-Agent'=$env:DTH_UA;'Accept'=$env:DTH_ACCEPT} -TimeoutSec %d" % int(timeout))
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                        "-Command", ps], env=env, capture_output=True, text=True,
+                       timeout=timeout + 30, creationflags=0x08000000)
+    if r.returncode != 0 or not os.path.exists(out):
+        raise RuntimeError(f"Windows download failed: {(r.stderr or r.stdout).strip()[:200]}")
+    if dest is None:
+        with open(out, "rb") as f:
+            data = f.read()
+        os.remove(out)
+        return data
+    return None
+
 # Always work in the folder this program lives in (double-clicking or starting as
 # admin can otherwise start it in C:\Windows\System32 and lose config.json)
 BASE_DIR = os.path.dirname(os.path.abspath(
@@ -90,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.8.9"
+VERSION = "1.9.0"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -3459,7 +3500,6 @@ def tray_message(msg):
 
 def check_for_update(manual=False):
     """If GitHub has a newer release, download it, swap it in and restart."""
-    import urllib.request
     if "YOUR-GITHUB-NAME" in UPDATE_REPO:
         if manual:
             notify("Updates aren't set up yet (UPDATE_REPO in key_helper.py)")
@@ -3467,11 +3507,9 @@ def check_for_update(manual=False):
         return
     try:
         notify(f"v{VERSION} - checking for updates...")
-        req = urllib.request.Request(
+        release = json.loads(web_get(
             f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
-            headers={"User-Agent": "SW-Key-Helper", "Accept": "application/vnd.github+json"})
-        with urllib.request.urlopen(req, timeout=6) as r:
-            release = json.load(r)
+            {"Accept": "application/vnd.github+json"}, timeout=15))
         latest = release.get("tag_name", "")
         if version_tuple(latest) <= version_tuple(VERSION):
             notify(f"v{VERSION} - up to date")
@@ -3492,14 +3530,7 @@ def check_for_update(manual=False):
         err = None
         for attempt in range(3):                  # big file - retry if the connection drops
             try:
-                req = urllib.request.Request(asset["browser_download_url"],
-                                             headers={"User-Agent": "SW-Key-Helper"})
-                with urllib.request.urlopen(req, timeout=120) as r, open(new_path, "wb") as f:
-                    while True:
-                        chunk = r.read(1 << 20)
-                        if not chunk:
-                            break
-                        f.write(chunk)
+                web_get(asset["browser_download_url"], timeout=300, dest=new_path)
                 if not size or os.path.getsize(new_path) == size:
                     err = None
                     break
@@ -3590,11 +3621,8 @@ def icon_path():
             return path
     path = os.path.join(BASE_DIR, "Droid Tycoon Helper.ico")
     try:
-        import urllib.request
         url = f"https://raw.githubusercontent.com/{UPDATE_REPO}/main/Droid%20Tycoon%20Helper.ico"
-        with urllib.request.urlopen(urllib.request.Request(
-                url, headers={"User-Agent": "SW-Key-Helper"}), timeout=10) as r:
-            data = r.read()
+        data = web_get(url, timeout=15)
         with open(path, "wb") as f:
             f.write(data)
         return path
@@ -3766,13 +3794,10 @@ def _panel_html():
             with open(path, encoding="utf-8") as f:
                 _panel_cache["html"] = f.read()
             return _panel_cache["html"]
-    import urllib.request
     for ref in (f"v{VERSION}", "main"):
         try:
             url = f"https://raw.githubusercontent.com/{UPDATE_REPO}/{ref}/{PANEL_FILE}"
-            req = urllib.request.Request(url, headers={"User-Agent": "SW-Key-Helper"})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                html = r.read().decode("utf-8")
+            html = web_get(url, timeout=20).decode("utf-8")
             if "Droid Tycoon Helper" not in html:
                 continue
             with open(cached, "w", encoding="utf-8") as f:
