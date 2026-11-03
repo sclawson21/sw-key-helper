@@ -16,6 +16,11 @@ on:
 permissions:
   contents: write
 
+# uploads close together build one after the other (never two at once)
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-latest
@@ -92,6 +97,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${{ steps.ver.outputs.version }}"
-          gh release create "v$v" "dist/Droid Tycoon Helper.exe" \
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "v$v was published by another run a moment ago - nothing to do."
+            exit 0
+          fi
+          gh release create "v$v" "dist/Droid Tycoon Helper.exe" --target "${{ github.sha }}" \
             --title "Droid Tycoon Helper v$v" \
             --notes "Droid Tycoon Helper v$v - everyone's copy updates itself on next start."
