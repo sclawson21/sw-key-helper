@@ -12,7 +12,6 @@ Hotkeys (work while the game is focused):
               (Traits then shows the trait list: Up/Down move, Left/Right sets
               Off / Any / Rainbow-only, Insert starts rolling)
   Page Up     rebirth +1 on the website (Page Down = undo the last one)
-  Page Down   slower
   F9 / F10    add / remove the droid on screen (droid screen or blueprint card) in
               your LMS Droid Tycoon inventory - press once to check, again to save
   Home        draw a custom scan area (optional - the default is automatic)
@@ -46,6 +45,27 @@ import pydirectinput
 import pytesseract
 from pynput import keyboard
 
+
+def _use_windows_certificates():
+    """Check HTTPS certificates the way Windows and browsers do. Python's own check
+    can fail with 'unable to get issuer certificate' when a site (like GitHub) changes
+    its certificates - that broke updates. Falls back to the certifi bundle."""
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+        return "windows"
+    except Exception:
+        pass
+    try:
+        import certifi
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        return "certifi"
+    except Exception:
+        return "python"
+
+
+CERT_SOURCE = _use_windows_certificates()
+
 # Always work in the folder this program lives in (double-clicking or starting as
 # admin can otherwise start it in C:\Windows\System32 and lose config.json)
 BASE_DIR = os.path.dirname(os.path.abspath(
@@ -70,7 +90,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.8.7"
+VERSION = "1.8.8"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -4754,7 +4774,7 @@ def set_app_id():
 
 def main():
     print(__doc__)
-    print("Version", VERSION)
+    print("Version", VERSION, "\u00b7 certificates:", CERT_SOURCE)
     if move_to_new_name():
         return
     set_app_id()
