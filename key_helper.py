@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.9.1"
+VERSION = "1.9.2"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -607,13 +607,13 @@ def rebirth_hotkey(step):
                     notify(f"{player['name']}: all 40 rebirths are already done", 5)
                     return
                 levels = sorted(levels + [nxt])
-                msg = f"\u2714 Rebirth {nxt} complete for {player['name']}"
+                msg = f"\u2714 Rebirth {nxt} complete!"
             else:
                 if not levels:
                     notify(f"{player['name']}: no rebirths to undo", 4)
                     return
                 last = levels.pop()
-                msg = f"Undid rebirth {last} for {player['name']}"
+                msg = f"\u21a9 Rebirth {last} undone"
             done[cycle] = levels
             body = {"fields": {"done": _to_fs(done),
                                "updatedAt": {"integerValue": str(int(time.time() * 1000))}}}
@@ -621,7 +621,9 @@ def rebirth_hotkey(step):
                   token=id_token(), method="PATCH")
             state["data_version"] = state.get("data_version", 0) + 1
             top = max(levels) if levels else 0
-            notify(f"{msg} \u00b7 now at rebirth {top} (cycle {cycle})", 6)
+            who = f" ({player['name']})" if len(_players["list"]) > 1 else ""
+            print(f"{msg}{who} - now at rebirth {top}, cycle {cycle}")
+            notify(msg + who, 6)
         except Exception as e:
             notify(f"Couldn't change the rebirth: {e}"[:120], 6)
     threading.Thread(target=work, daemon=True).start()
@@ -3435,10 +3437,13 @@ def run_windows():
         want_inv = bool(state["inv_lines"]) and time.time() < state["inv_until"]
         full = cfg["overlay"] and (
             not cfg["hide_when_paused"] or state["enabled"] or state["error"]
-            or state["menu_open"] or time.time() < state["show_until"])
+            or state["menu_open"] or (time.time() < state["show_until"] and state["enabled"]))
+        # while idle, messages are one line in the small box (no full overlay pop-up)
+        toast = (not state["enabled"] and not state["menu_open"] and not state["error"]
+                 and time.time() < state["show_until"] and bool(state["message"]))
         rb_idle = cfg["overlay"] and not state["enabled"] and bool(rebirth_lines())
         view = "full" if full else ("mini" if (cfg["mini_badge"] and not cfg["discreet"]) or rb_idle
-                                    or want_inv else "none")
+                                    or want_inv or (toast and cfg["overlay"]) else "none")
         if not game_in_front() and not state.get("area_open"):
             view = "none"                        # another window is in front - stay out of the way
         if state["capture_hide"]:
@@ -3468,6 +3473,10 @@ def run_windows():
                           for i, t in enumerate(state["inv_lines"][:6])]
         else:
             idle_lines = [] if (state["enabled"] or state["menu_open"]) else rebirth_lines()
+            if toast:
+                m = state["message"]
+                idle_lines = [(m, GREEN if m.startswith("\u2714") else
+                               RED if m.lower().startswith(("couldn", "update failed")) else FG)] + idle_lines[:5]
         show_rb("mini", mini_rb, mini_rb_labels, idle_lines)
         show_rb("full", full_rb, full_rb_labels, idle_lines, after=message)
         if view == "mini":
