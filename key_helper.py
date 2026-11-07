@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.9.2"
+VERSION = "1.9.3"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -190,7 +190,11 @@ DEFAULTS = {
     "open_window_on_start": True,
     "panel_height": 360,
     "show_rebirth": True,
-    "hide_outside_game": True,  # hide the overlay while another window is in front       # next rebirth's credits and droids under the badge while idle
+    "hide_outside_game": True,  # hide the overlay while another window is in front
+    # --- Blueprint timers (above the NEXT MISSION box, only in the last few minutes) ---
+    "timers_on": True,
+    "timers_within": 5,         # minutes before a drop that the timer shows up
+    "timers": {"Kyber": [15], "Mythic": [55], "Stellar": [5, 35]},   # minutes past the hour       # next rebirth's credits and droids under the badge while idle
     # --- Overlay ---
     "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
     "overlay": True,            # show the on-screen info box
@@ -3233,6 +3237,67 @@ def rebirth_lines():
     return lines
 
 
+# ------------------------------------------------------------ blueprint timers ---
+# The Sandcrawler signs count down to fixed minutes past each hour (world time =
+# real time): Kyber :15, Mythic :55, Stellar :05 and :35. The PC clock is checked
+# against an internet clock so a few seconds off on the PC doesn't matter.
+TIMER_COLORS = {"Kyber": "#1fbf9a", "Mythic": "#ff5a78", "Stellar": "#ffd76a"}
+_clock = {"offset": 0.0, "checked": 0.0, "source": "this PC"}
+
+
+def sync_clock():
+    """Difference between this PC's clock and internet time (HTTP Date header)."""
+    import urllib.request
+    from email.utils import parsedate_to_datetime
+    for url in ("https://www.google.com/generate_204", "https://api.github.com"):
+        try:
+            t0 = time.time()
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Droid-Tycoon-Helper"})
+            with urllib.request.urlopen(req, timeout=6) as r:
+                date = r.headers.get("Date")
+            t1 = time.time()
+            if date:
+                server = parsedate_to_datetime(date).timestamp() + 0.5   # Date has whole seconds
+                _clock["offset"] = server - (t0 + t1) / 2
+                _clock["checked"] = t1
+                _clock["source"] = "internet time"
+                print(f"Clock: PC is {-_clock['offset']:+.1f} s off internet time")
+                return
+        except Exception as e:
+            print("Clock check failed:", url, e)
+
+
+def world_now():
+    return time.time() + _clock["offset"]
+
+
+def blueprint_timers():
+    """[(name, seconds until the next drop)] soonest first."""
+    now = world_now()
+    into_hour = now % 3600
+    out = []
+    for name, minutes in (cfg.get("timers") or {}).items():
+        best = None
+        for m in minutes or []:
+            try:
+                left = (int(m) % 60) * 60 - into_hour
+            except (TypeError, ValueError):
+                continue
+            if left <= -30:                        # just dropped ("NOW" for 30 s), then next hour
+                left += 3600
+            best = left if best is None else min(best, left)
+        if best is not None:
+            out.append((name, best))
+    return sorted(out, key=lambda x: x[1])
+
+
+def fmt_countdown(sec):
+    if sec <= 0:
+        return "NOW!"
+    sec = int(sec)
+    return f"{sec // 60:02d}:{sec % 60:02d}"
+
+
 _front = {"t": 0.0, "game": True}
 
 
@@ -3336,6 +3401,64 @@ def run_windows():
             box.pack(anchor="w", fill="x", pady=(4, 0))
 
     make_click_through(root)
+
+    # blueprint timers: their own small window just above the NEXT MISSION box
+    twin = tk.Toplevel(root)
+    twin.overrideredirect(True)
+    twin.attributes("-topmost", True)
+    twin.attributes("-alpha", 0.93)
+    twin.configure(bg=BG)
+    tbox = tk.Frame(twin, bg=BG, padx=10, pady=6, highlightthickness=1,
+                    highlightbackground="#2b3038")
+    tbox.pack()
+    trows = []
+    for _ in range(4):
+        row = tk.Frame(tbox, bg=BG)
+        name = tk.Label(row, bg=BG, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w")
+        clock = tk.Label(row, bg=BG, fg=FG, font=("Consolas", 13, "bold"), anchor="e")
+        name.pack(side="left")
+        clock.pack(side="right", padx=(14, 0))
+        trows.append((row, name, clock))
+    twin.withdraw()
+    make_click_through(twin)
+    tshown = {"on": False, "key": "", "pos": ""}
+
+    def refresh_timers(game_front):
+        due = [(n, s) for n, s in blueprint_timers() if s <= cfg.get("timers_within", 5) * 60]
+        want = (cfg.get("timers_on", True) and bool(due) and game_front
+                and not state["capture_hide"] and not state.get("area_open"))
+        if not want:
+            if tshown["on"]:
+                twin.withdraw()
+                tshown["on"] = False
+            return
+        key = "|".join(n for n, _ in due)
+        if key != tshown["key"]:                   # which timers are listed changed
+            for i, (row, name, clock) in enumerate(trows):
+                if i < len(due):
+                    name.config(text=f"NEXT {due[i][0].upper()} BLUEPRINT",
+                                fg=TIMER_COLORS.get(due[i][0], FG))
+                    row.pack(fill="x")
+                else:
+                    row.pack_forget()
+            tshown["key"] = key
+        for i, (n, sec) in enumerate(due[:len(trows)]):
+            trows[i][2].config(text=fmt_countdown(sec),
+                               fg=GREEN if sec <= 0 else (RED if sec <= 60 else FG))
+        twin.update_idletasks()
+        mon = screen()
+        x = mon["left"] + int(mon["width"] * 0.986) - twin.winfo_reqwidth()
+        y = mon["top"] + int(mon["height"] * 0.657) - twin.winfo_reqheight()
+        pos = f"+{x}+{y}"
+        if pos != tshown["pos"]:
+            twin.geometry(pos)
+            tshown["pos"] = pos
+        if not tshown["on"]:
+            twin.deiconify()
+            make_click_through(twin)
+            tshown["on"] = True
+        twin.attributes("-topmost", True)
+
     shown = ["full"]
     placed = [""]
 
@@ -3444,7 +3567,9 @@ def run_windows():
         rb_idle = cfg["overlay"] and not state["enabled"] and bool(rebirth_lines())
         view = "full" if full else ("mini" if (cfg["mini_badge"] and not cfg["discreet"]) or rb_idle
                                     or want_inv or (toast and cfg["overlay"]) else "none")
-        if not game_in_front() and not state.get("area_open"):
+        front = game_in_front()
+        refresh_timers(front)
+        if not front and not state.get("area_open"):
             view = "none"                        # another window is in front - stay out of the way
         if state["capture_hide"]:
             view = "none"
@@ -3967,6 +4092,11 @@ def panel_state():
             "open_window_on_start": cfg["open_window_on_start"],
             "show_rebirth": cfg.get("show_rebirth", True),
             "hide_outside_game": cfg.get("hide_outside_game", True),
+            "timers_on": cfg.get("timers_on", True), "timers_within": cfg.get("timers_within", 5),
+            "timers": cfg["timers"],
+            "timers_now": [{"name": n, "left": round(sec)} for n, sec in blueprint_timers()],
+            "clock": f"{_clock['source']}" + (f" (this PC is {-_clock['offset']:+.0f} s off)"
+                                             if abs(_clock["offset"]) >= 1 else ""),
             "panel_height": cfg["panel_height"],
         },
         "account": {"username": _account.get("username", ""),
@@ -4045,6 +4175,17 @@ def panel_set(key, value):
         if value and not re.match(r"^https?://[^\s/$.?#][^\s]*$", value):
             return "That doesn't look like a web address"
         cfg["website_url"] = value
+    elif key == "timers_on":
+        cfg["timers_on"] = _as_bool(value)
+    elif key == "timers_within":
+        cfg["timers_within"] = _clamp_num(value, 1, 60, int)
+    elif key == "timer_minutes":
+        if not isinstance(value, dict) or value.get("name") not in cfg["timers"]:
+            return "bad value"
+        mins = sorted({int(m) % 60 for m in re.findall(r"\d+", str(value.get("minutes", "")))})
+        if not mins:
+            return "Enter at least one minute, e.g. 15 or 5, 35"
+        cfg["timers"][value["name"]] = mins
     elif key == "panel_height":
         cfg["panel_height"] = _clamp_num(value, 60, 2000, int)
     elif key == "mode":
@@ -4853,6 +4994,12 @@ def main():
     listener = keyboard.Listener(on_press=on_key)
     listener.start()
     threading.Thread(target=rebirth_watch, daemon=True).start()
+
+    def clock_loop():
+        while not state["quit"]:
+            sync_clock()
+            time.sleep(3600)
+    threading.Thread(target=clock_loop, daemon=True).start()
     threading.Thread(target=scanner, daemon=True).start()
     try:
         start_panel_server()

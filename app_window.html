@@ -158,6 +158,10 @@ button{cursor:pointer}
 .sys .pending.empty{color:var(--muted);font-family:var(--body)}
 kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1px solid var(--line-2);border-bottom-width:2px;border-radius:4px;padding:0 5px}
 .sys .stack{display:flex;flex-direction:column;gap:14px}
+.sys .tmr{display:grid;grid-template-columns:minmax(0,1fr) auto 5.5rem;gap:6px 12px;align-items:center}
+.sys .tmr .tn{font-family:var(--display);font-weight:700;font-size:.85rem;letter-spacing:.03em}
+.sys .tmr input{width:5.5rem;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+.sys .tmr .cd{font-family:var(--mono);text-align:right}
 
 /* droidex */
 .dex-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px}
@@ -640,6 +644,13 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
               <label class="switch"><input type="checkbox" id="s-mini"><span>Small badge while idle</span></label>
               <label class="switch"><input type="checkbox" id="s-discreet"><span>Discreet mode<small>Hides the idle badge too.</small></span></label>
               <label class="switch"><input type="checkbox" id="s-rebirth"><span>Show the next rebirth while idle<small>Credits and the 3 droids it needs, with ✔ for the ones you have. Hidden while Fishing, Traits or the clicker run.</small></span></label>
+            </div>
+            <div class="card">
+              <h3>Blueprint timers <span class="sub">Sandcrawler drops</span></h3>
+              <label class="switch"><input type="checkbox" id="s-timers"><span>Show them in the game<small>Just above the NEXT MISSION box, only near the end.</small></span></label>
+              <div class="row"><label for="s-within" class="note">Show when</label><input type="number" id="s-within" min="1" max="60" step="1" style="width:4.5rem"><span class="note">minutes or less are left</span></div>
+              <div class="tmr" id="s-tlist"></div>
+              <p class="note" id="s-clock"></p>
             </div>
             <div class="card">
               <h3>App</h3>
@@ -1896,7 +1907,23 @@ $("s-folder").addEventListener("click",()=>action("open_folder"));
 $("s-pics-reload").addEventListener("click",()=>action("reload_pictures").then(ok=>ok&&toast("Looking for pictures on the wiki…",true)));
 $("s-signout").addEventListener("click",()=>{if(confirm("Sign out? Droid Tycoon Helper will close and ask you to sign in next time."))action("sign_out")});
 $("s-quit").addEventListener("click",()=>{if(confirm("Quit Droid Tycoon Helper?"))action("quit")});
+$("s-timers").addEventListener("change",e=>setting("timers_on",e.target.checked,"s-timers"));
+$("s-within").addEventListener("change",e=>setting("timers_within",+e.target.value,"s-within"));
+const TCOL={Kyber:"#1fbf9a",Mythic:"#ff5a78",Stellar:"#ffd76a"};
+let tKeys="";
+function renderTimers(){
+  const s=S.settings, keys=Object.keys(s.timers).join("|");
+  if(keys!==tKeys){tKeys=keys;
+    $("s-tlist").innerHTML=Object.keys(s.timers).map(n=>`<span class="tn" style="color:${TCOL[n]||"inherit"}">${esc2(n)}</span><input type="text" data-t="${esc2(n)}" id="tm-${esc2(n)}" title="Minutes past each hour, e.g. 5, 35"><span class="cd" id="cd-${esc2(n)}">–</span>`).join("");
+    $("s-tlist").querySelectorAll("input[data-t]").forEach(i=>i.addEventListener("change",e=>setting("timer_minutes",{name:e.target.dataset.t,minutes:e.target.value},e.target.id)));
+  }
+  Object.entries(s.timers).forEach(([n,m])=>val("tm-"+n,m.map(x=>":"+String(x).padStart(2,"0")).join(", ")));
+  (s.timers_now||[]).forEach(({name,left})=>{const el=$("cd-"+name);if(el){const v=left<=0?"NOW!":String(Math.floor(left/60)).padStart(2,"0")+":"+String(left%60).padStart(2,"0");if(el.textContent!==v)el.textContent=v}});
+  chk("s-timers",s.timers_on); val("s-within",s.timers_within);
+  txt("s-clock","Times past each hour, from "+s.clock+". If the game ever changes its schedule, change the minutes here.");
+}
 function renderSettings(){
+  renderTimers();
   const s=S.settings;
   chk("s-openwin",s.open_window_on_start);chk("s-overlay",s.overlay);chk("s-hide",s.hide_when_paused);
   chk("s-mini",s.mini_badge);chk("s-rebirth",s.show_rebirth);chk("s-outside",s.hide_outside_game);chk("s-discreet",s.discreet);chk("s-auto",s.auto_update);
