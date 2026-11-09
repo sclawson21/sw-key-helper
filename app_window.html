@@ -113,7 +113,7 @@ button{cursor:pointer}
 .sys .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .sys .field{display:flex;flex-direction:column;gap:5px;min-width:0}
 .sys .field>label,.sys .field>.lbl{font-size:.8rem;color:var(--muted)}
-.sys select,.sys input[type=text],.sys input[type=number]{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0}
+.sys select,.sys input[type=text],.sys input[type=tel],.sys input[type=number]{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0}
 .sys input[type=number]{width:6.5rem}
 .sys input[type=range]{width:100%;accent-color:var(--accent)}
 .sys .rangeval{font-family:var(--mono);min-width:5.5ch;text-align:right}
@@ -590,7 +590,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
                 <div class="row" style="flex-wrap:nowrap"><input type="range" id="c-cps" min="1" max="50" step="1"><span class="rangeval" id="c-cps-v"></span></div>
               </div>
               <div class="field" id="c-pot-f">
-                <label for="c-pot">Press F every</label>
+                <label for="c-pot">Press <span class="ikey">F</span> every</label>
                 <div class="row" style="flex-wrap:nowrap"><input type="range" id="c-pot" min="2" max="20" step="1"><span class="rangeval" id="c-pot-v"></span></div>
               </div>
               <label class="switch"><input type="checkbox" id="c-only"><span>Only while Fortnite is in front<small>Pauses when you switch to another window.</small></span></label>
@@ -627,7 +627,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
             <div class="card">
               <h3>How it works</h3>
               <p class="note">Click <b>Change</b>, then press the new key. Esc cancels. If another action already uses that key, the two swap.</p>
-              <p class="note">Keys the game needs can't be used: the fishing letters, F, W A S D, Space, Enter, Esc and the arrow keys (the arrows run the on-screen menus).</p>
+              <p class="note">Keys the game needs can't be used: the fishing letters, your Interact key (<span class="ikey">F</span>), W A S D, Space, Enter, Esc and the arrow keys (the arrows run the on-screen menus).</p>
               <p class="note">Hotkeys are switched off while this window is in front, so typing here never triggers them.</p>
             </div>
           </div>
@@ -647,10 +647,15 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
             </div>
             <div class="card">
               <h3>Blueprint timers <span class="sub">Sandcrawler drops</span></h3>
-              <label class="switch"><input type="checkbox" id="s-timers"><span>Show them in the game<small>Just above the NEXT MISSION box, only near the end.</small></span></label>
+              <label class="switch"><input type="checkbox" id="s-timers"><span>Show them in the game<small>Just under the NEXT MISSION box, only near the end.</small></span></label>
               <div class="row"><label for="s-within" class="note">Show when</label><input type="number" id="s-within" min="1" max="60" step="1" style="width:4.5rem"><span class="note">minutes or less are left</span></div>
               <div class="tmr" id="s-tlist"></div>
               <p class="note" id="s-clock"></p>
+            </div>
+            <div class="card">
+              <h3>Fortnite keys</h3>
+              <div class="row"><label for="s-ikey" class="note">Interact key</label><input type="text" id="s-ikey" maxlength="1" spellcheck="false" autocomplete="off" style="width:3.2rem;text-align:center;text-transform:uppercase;font-weight:600"></div>
+              <p class="note">The key you use to interact in Fortnite (F by default). Traits and Potion Grab press this key, and fishing also watches for it in the key prompts. Match it to your Fortnite keybind.</p>
             </div>
             <div class="card">
               <h3>App</h3>
@@ -1907,6 +1912,7 @@ $("s-folder").addEventListener("click",()=>action("open_folder"));
 $("s-pics-reload").addEventListener("click",()=>action("reload_pictures").then(ok=>ok&&toast("Looking for pictures on the wiki…",true)));
 $("s-signout").addEventListener("click",()=>{if(confirm("Sign out? Droid Tycoon Helper will close and ask you to sign in next time."))action("sign_out")});
 $("s-quit").addEventListener("click",()=>{if(confirm("Quit Droid Tycoon Helper?"))action("quit")});
+$("s-ikey").addEventListener("change",e=>setting("interact_key",e.target.value,"s-ikey"));
 $("s-timers").addEventListener("change",e=>setting("timers_on",e.target.checked,"s-timers"));
 $("s-within").addEventListener("change",e=>setting("timers_within",+e.target.value,"s-within"));
 const TCOL={Kyber:"#1fbf9a",Mythic:"#ff5a78",Stellar:"#ffd76a"};
@@ -1924,6 +1930,8 @@ function renderTimers(){
 }
 function renderSettings(){
   renderTimers();
+  val("s-ikey",S.settings.interact_key||"F");
+  document.querySelectorAll(".ikey").forEach(e=>{if(e.textContent!==(S.settings.interact_key||"F"))e.textContent=S.settings.interact_key||"F"});
   const s=S.settings;
   chk("s-openwin",s.open_window_on_start);chk("s-overlay",s.overlay);chk("s-hide",s.hide_when_paused);
   chk("s-mini",s.mini_badge);chk("s-rebirth",s.show_rebirth);chk("s-outside",s.hide_outside_game);chk("s-discreet",s.discreet);chk("s-auto",s.auto_update);

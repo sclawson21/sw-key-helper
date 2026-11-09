@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.9.3"
+VERSION = "1.9.7"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -175,7 +175,7 @@ DEFAULTS = {
     "clicker_kind": "scrap",    # "scrap" = keep left-clicking, "potion" = press F every few seconds
     "potion_interval": 5,       # Potion Grab: seconds between F presses (2-20, Page Up/Down)
     "clicker_window": "Fortnite",  # only click while this window is in front ("" = anywhere)
-    "interact_key": "f",
+    "interact_key": "f",        # Fortnite's Interact key (Settings): traits, Potion Grab, fishing
     # --- Inventory (LMS Droid Tycoon website) ---
     "inventory_player": "",     # which website player F9/F10 update (pick it in the tray menu)
     "kyber_default": "n",       # Kyber colour for added droids: n=Not Activated, g, b, p
@@ -191,10 +191,10 @@ DEFAULTS = {
     "panel_height": 360,
     "show_rebirth": True,
     "hide_outside_game": True,  # hide the overlay while another window is in front
-    # --- Blueprint timers (above the NEXT MISSION box, only in the last few minutes) ---
+    # --- Blueprint timers (under the NEXT MISSION box, only in the last few minutes) ---
     "timers_on": True,
     "timers_within": 5,         # minutes before a drop that the timer shows up
-    "timers": {"Kyber": [15], "Mythic": [55], "Stellar": [5, 35]},   # minutes past the hour       # next rebirth's credits and droids under the badge while idle
+    "timers": {"Kyber": [15], "Mythic": [55], "Stellar": [5, 35]},
     # --- Overlay ---
     "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
     "overlay": True,            # show the on-screen info box
@@ -343,7 +343,7 @@ state = {
 MODES = ["fishing", "traits", "clicker"]
 MODE_NAMES = ["Fishing", "Traits (droid scanner)", "Auto Clicker"]
 DROID_CHOICES = [("left", "Left droid"), ("right", "Right droid"), ("both", "Both (take turns - faster)")]
-CLICKER_CHOICES = [("scrap", "Scrap Hit (keep left-clicking)"), ("potion", "Potion Grab (press F every few seconds)")]
+CLICKER_CHOICES = [("scrap", "Scrap Hit (keep left-clicking)"), ("potion", "Potion Grab (press Interact every few seconds)")]
 COST_STEPS = ["off", "1B", "10B", "100B", "1T", "10T", "50T", "100T", "500T", "600T", "700T",
               "800T", "900T", "1Qa", "2Qa", "3Qa", "4Qa", "5Qa"]   # 5Qa is the cap
 SUFFIX = {"": 1, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12, "QA": 1e15, "QI": 1e18,
@@ -463,13 +463,29 @@ def hk(action):
     return cfg["hotkeys"].get(action, "")
 
 
+def ikey():
+    """Fortnite's Interact key (F unless changed in Settings)."""
+    k = str(cfg.get("interact_key") or "f").lower()
+    return k if re.fullmatch(r"[a-z0-9]", k) else "f"
+
+
+def ikey_label():
+    return ikey().upper()
+
+
+def fishing_letters():
+    """Letters the fishing prompts can show: E F Z Q C plus a rebound Interact key."""
+    letters = cfg["allowed_keys"].upper()
+    return letters if ikey_label() in letters else letters + ikey_label()
+
+
 def hk_label(action):
     return pretty_key(hk(action))
 
 
 def hotkey_problem(name):
     """Why a key can't be a hotkey (it's needed in the game or by the app), or ''."""
-    game = set(cfg["allowed_keys"].lower()) | {cfg["interact_key"].lower(), "w", "a", "s", "d"}
+    game = set(cfg["allowed_keys"].lower()) | {ikey(), "w", "a", "s", "d"}
     if name in ("up", "down", "left", "right"):
         return "Arrow keys are used by the on-screen menus"
     if name in ("esc", "enter", "space", "tab", "backspace"):
@@ -477,7 +493,7 @@ def hotkey_problem(name):
     if name.startswith(("shift", "ctrl", "alt", "cmd")):
         return "Shift / Ctrl / Alt can't be used on their own"
     if name in game:
-        return f"{name.upper()} is used in the game (fishing keys, F, WASD)"
+        return f"{name.upper()} is used in the game (fishing keys, Interact {ikey_label()}, WASD)"
     return ""
 
 
@@ -638,7 +654,7 @@ def change_speed(step):
     if state["mode"] == "clicker":
         if cfg["clicker_kind"] == "potion":       # faster = shorter wait
             cfg["potion_interval"] = int(min(20, max(2, cfg["potion_interval"] - step)))
-            notify(f"Potion Grab: F every {cfg['potion_interval']} seconds")
+            notify(f"Potion Grab: {ikey_label()} every {cfg['potion_interval']} seconds")
         else:
             cfg["clicker_cps"] = int(min(50, max(1, cfg["clicker_cps"] + step)))
             notify(f"Scrap Hit: {cfg['clicker_cps']} clicks per second")
@@ -798,7 +814,7 @@ def letter_image(bgr, tile):
 
 
 def ocr(img, psm):
-    allowed = cfg["allowed_keys"].upper()
+    allowed = fishing_letters()
     text = pytesseract.image_to_string(
         img, config=f"--psm {psm} -c tessedit_char_whitelist={allowed}")
     return [c for c in text.upper() if c in allowed]
@@ -847,8 +863,8 @@ def read_keys(bgr, tiles):
         parts += [img, gap]
     strip = np.hstack(parts[:-1])
 
-    allowed = cfg["allowed_keys"].upper()
-    if set(allowed) <= set("EFZQC"):
+    allowed = fishing_letters()
+    if set(allowed) <= set("EFZQC"):          # a rebound Interact letter needs OCR
         keys = [shape_letter(img) for img in letters]
         if all(k and k in allowed for k in keys):
             return [k.lower() for k in keys], strip
@@ -1760,7 +1776,7 @@ def run_traits(sct):
             state["status"] = "Opening droid menu"
             found = None
             for _ in range(5):
-                press(cfg["interact_key"])
+                press(ikey())
                 found = wait_for_menu(sct, "either", 2.5)
                 if found or not traits_active():
                     break
@@ -3029,12 +3045,12 @@ def _run_clicker():
             except Exception as e:
                 print("Balance read failed:", e)
         if cfg["clicker_kind"] == "potion":
-            press(cfg["interact_key"])
+            press(ikey())
             state["clicks"] += 1
             end = time.time() + cfg["potion_interval"]
             while (time.time() < end and state["enabled"] and state["mode"] == "clicker"
                    and not state["quit"] and cfg["clicker_kind"] == "potion"):
-                state["status"] = f"Pressed F \u00b7 next in {end - time.time():.0f}s"
+                state["status"] = f"Pressed {ikey_label()} \u00b7 next in {end - time.time():.0f}s"
                 time.sleep(0.1)
                 state["active_secs"] += min(1.0, time.time() - last_tick)
                 last_tick = time.time()
@@ -3448,7 +3464,7 @@ def run_windows():
         twin.update_idletasks()
         mon = screen()
         x = mon["left"] + int(mon["width"] * 0.986) - twin.winfo_reqwidth()
-        y = mon["top"] + int(mon["height"] * 0.657) - twin.winfo_reqheight()
+        y = mon["top"] + int(mon["height"] * 0.716)     # just under the NEXT MISSION bar
         pos = f"+{x}+{y}"
         if pos != tshown["pos"]:
             twin.geometry(pos)
@@ -3538,7 +3554,7 @@ def run_windows():
                     reading.config(text=f"Potion Grab \u00b7 Time active: {active}")
                     pressed.config(text=f"Every {cfg['potion_interval']}s \u00b7 "
                                         f"{state['status'] or DASH}")
-                    what = f"Presses F {where}"
+                    what = f"Presses {ikey_label()} {where}"
                 else:
                     reading.config(text=f"Scrap Hit \u00b7 Time active: {active}")
                     pressed.config(text=f"Speed: {cfg['clicker_cps']}/s \u00b7 "
@@ -4098,6 +4114,7 @@ def panel_state():
             "clock": f"{_clock['source']}" + (f" (this PC is {-_clock['offset']:+.0f} s off)"
                                              if abs(_clock["offset"]) >= 1 else ""),
             "panel_height": cfg["panel_height"],
+            "interact_key": ikey_label(),
         },
         "account": {"username": _account.get("username", ""),
                     "signed_in": bool(_account.get("refresh")),
@@ -4186,6 +4203,16 @@ def panel_set(key, value):
         if not mins:
             return "Enter at least one minute, e.g. 15 or 5, 35"
         cfg["timers"][value["name"]] = mins
+    elif key == "interact_key":
+        k = str(value).strip().lower()
+        if not re.fullmatch(r"[a-z0-9]", k):
+            return "Use one letter or number"
+        if k in ("w", "a", "s", "d"):
+            return f"{k.upper()} is a movement key"
+        used = [label for a, label in HOTKEY_ACTIONS if hk(a) == k]
+        if used:
+            return f"{k.upper()} is the app hotkey for {used[0]} - change that first"
+        cfg["interact_key"] = k
     elif key == "panel_height":
         cfg["panel_height"] = _clamp_num(value, 60, 2000, int)
     elif key == "mode":
