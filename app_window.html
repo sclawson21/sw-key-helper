@@ -64,6 +64,32 @@ button{cursor:pointer}
 .top-t h1{font-family:var(--display);font-size:1.35rem;letter-spacing:.06em;text-transform:uppercase;margin:0;line-height:1.1}
 .top-t p{margin:2px 0 0;color:var(--muted);font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .save{font-size:.78rem;color:var(--muted);white-space:nowrap}
+.tpick{display:flex;flex-wrap:wrap;gap:6px}
+.tpick button{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:5px 12px;font:inherit;font-size:.82rem;font-weight:600;cursor:pointer}
+.tpick button i{width:9px;height:9px;border-radius:50%;background:var(--c,#888);opacity:.45}
+.tpick button[aria-pressed="true"]{color:var(--text);border-color:var(--c,#888);background:color-mix(in srgb,var(--c,#888) 16%,var(--panel-2))}
+.tpick button[aria-pressed="true"] i{opacity:1}
+.tpick button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tgrid-wrap{overflow-x:auto}
+.tgrid{border-collapse:separate;border-spacing:3px;font-size:.8rem}
+.tgrid th{font-weight:700;padding:0}
+.tgrid th button{background:none;border:0;font:inherit;font-weight:700;color:var(--c,var(--text));cursor:pointer;padding:4px 6px;border-radius:6px;white-space:nowrap}
+.tgrid thead th button{font-size:.74rem;letter-spacing:.02em}
+.tgrid tbody th button{text-align:left;width:100%}
+.tgrid th button:hover{background:var(--panel-2)}
+.tgrid th button.rainbow-t{color:transparent;background:linear-gradient(90deg,#ff6b9d,#c779ff,#5d8bff,#3fc6ff,#2fd38a,#ffd23f,#ff9f40);-webkit-background-clip:text;background-clip:text}
+.tgrid td{padding:0;text-align:center}
+.tgrid td button{width:34px;height:28px;border-radius:7px;border:1px solid var(--line);background:var(--panel-2);cursor:pointer;display:grid;place-items:center;margin:auto;padding:0}
+.tgrid td button svg{width:15px;height:15px;opacity:0}
+.tgrid td button[aria-pressed="true"]{background:var(--rc);border-color:var(--rc)}
+.tgrid td button[aria-pressed="true"] svg{opacity:1}
+.tgrid button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tlog{display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}
+.tlog div{display:flex;gap:12px;align-items:baseline;padding:5px 10px;border-radius:7px;font-size:.88rem}
+.tlog div.hit{background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.tlog time{font-family:var(--mono);color:var(--muted);font-size:.8rem;min-width:7.5em}
+.tlog b{font-weight:700}
+.rainbow-t{background:linear-gradient(90deg,#ff6b9d,#c779ff,#5d8bff,#3fc6ff,#2fd38a,#ffd23f,#ff9f40);-webkit-background-clip:text;background-clip:text;color:transparent}
 .chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel-2);border-radius:999px;padding:4px 12px;font-family:var(--display);font-weight:700;font-size:.76rem;letter-spacing:.05em;white-space:nowrap;text-transform:uppercase}
 .chip i{width:8px;height:8px;border-radius:50%;background:var(--warn)}
 .chip.on i{background:var(--good);box-shadow:0 0 0 3px var(--good-soft)}
@@ -462,6 +488,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
       <button class="sb-i" data-page="chips"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>Chips</button>
       <button class="sb-i" data-page="sdex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg>Scourgedex<span class="ct" id="ct-sdex"></span></button>
       <button class="sb-i" data-page="dex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>Droidex</button>
+      <button class="sb-i" data-page="track"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>Droid Tracker<i class="dot"></i></button>
       <div class="sb-h">Systems</div>
       <button class="sb-i" data-page="fishing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 3v10a5 5 0 0 1-10 0v-1"/><path d="M8 12l-3 3M8 12l3 3"/></svg>Fishing<i class="dot"></i></button>
       <button class="sb-i" data-page="traits"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z"/></svg>Traits<i class="dot"></i></button>
@@ -594,6 +621,33 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
                 <div class="row" style="flex-wrap:nowrap"><input type="range" id="c-pot" min="2" max="20" step="1"><span class="rangeval" id="c-pot-v"></span></div>
               </div>
               <label class="switch"><input type="checkbox" id="c-only"><span>Only while Fortnite is in front<small>Pauses when you switch to another window.</small></span></label>
+            </div>
+          </div>
+        </section>
+
+        <!-- DROID TRACKER -->
+        <section class="page" id="p-track">
+          <div class="grid">
+            <div class="card">
+              <h3>Alerts <span class="sub" id="dt-run"></span></h3>
+              <label class="switch"><input type="checkbox" id="dt-on"><span>Alert me when a tracked droid spawns<small>Works any time Fortnite is in front. No macro needs to be running.</small></span></label>
+              <label class="switch"><input type="checkbox" id="dt-sound"><span>Play a sound with the alert</span></label>
+              <div class="field">
+                <label for="dt-secs">Keep the alert up for</label>
+                <div class="row" style="flex-wrap:nowrap"><input type="range" id="dt-secs" min="3" max="20" step="1"><span class="rangeval" id="dt-secs-v"></span></div>
+              </div>
+              <div class="row"><button class="btn" id="dt-test" type="button">Show a test alert</button></div>
+              <p class="note">It reads the "&hellip; spawned at the Sandcrawler" messages on the left of the screen. The game posts those for Diamond and better.</p>
+            </div>
+            <div class="card">
+              <h3>Track these</h3>
+              <p class="note">Tick each variant and rarity you want an alert for. Click a variant or rarity name to tick or clear its whole row or column.</p>
+              <div class="tgrid-wrap"><table class="tgrid" id="dt-grid"></table></div>
+              <p class="note" id="dt-summary"></p>
+            </div>
+            <div class="card" style="grid-column:1/-1">
+              <h3>Spawned this session <span class="sub">Highlighted ones set off an alert</span></h3>
+              <div class="tlog" id="dt-log"></div>
             </div>
           </div>
         </section>
@@ -1609,6 +1663,7 @@ const PAGES={
   chips:["Chip Upgrades","Chips for your next rebirth, and an upgrade calculator.","data"],
   sdex:["Scourgedex","Hand in one Scourge of every droid.","data"],
   dex:["Droidex","Every droid and variant, with pictures.","dex"],
+  track:["Droid Tracker","A big alert at the top of the screen when a droid you want spawns.","sys"],
   fishing:["Fishing","Reads the key tiles and presses them for you.","sys"],
   traits:["Traits","Rerolls droid traits at the scanner until you get one you want.","sys"],
   clicker:["Auto Clicker","Scrap Hit clicking or Potion Grab.","sys"],
@@ -1748,7 +1803,7 @@ function renderHeader(){
   if(S.running){go.hidden=false;go.textContent="■ Stop "+(MODE_NAMES[S.mode]||"");go.classList.add("stop")}
   else if(sysMode){go.hidden=false;go.textContent="▶ Start "+MODE_NAMES[sysMode];go.classList.remove("stop")}
   else go.hidden=true;
-  document.querySelectorAll(".sb-i[data-page]").forEach(b=>b.classList.toggle("running",S.running&&b.dataset.page===S.mode));
+  document.querySelectorAll(".sb-i[data-page]").forEach(b=>b.classList.toggle("running",b.dataset.page==="track"?!!(S.tracker&&S.tracker.on&&S.tracker.combos.length):S.running&&b.dataset.page===S.mode));
   const m=$("msgbar"), text=S.error||(S.message_age<10?S.message:"");
   m.hidden=!text; if(text&&m.textContent!==text)m.textContent=text; m.classList.toggle("err",!!S.error);
   txt("sb-ver","v"+S.version); txt("sb-acct",S.account.username||"");
@@ -1880,6 +1935,53 @@ function renderClicker(){
 
 /* ---------- droid scanner ---------- */
 onSeg("i-kyber",v=>setting("kyber_default",v,"i-kyber"));
+/* ---------- droid tracker ---------- */
+function tColor(T,name,rar){return name==="Rainbow"?"#ff6b9d":(T.colors[(rar?"r_":"")+name]||"#888")}
+const TICK='<svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+function tGrid(T){
+  const g=$("dt-grid"), sig=T.all_variants.join()+T.all_rarities.join();
+  if(g.dataset.built!==sig){
+    const rc=r=>tColor(T,r,true);
+    g.innerHTML=`<thead><tr><th></th>${T.all_rarities.map(r=>`<th><button type="button" data-col="${r}" style="--c:${rc(r)}" title="Tick or clear every ${r}">${r}</button></th>`).join("")}</tr></thead><tbody>`+
+      T.all_variants.map(v=>`<tr><th><button type="button" data-row="${v}" ${v==="Rainbow"?'class="rainbow-t"':`style="--c:${tColor(T,v)}"`} title="Tick or clear every ${v}">${v}</button></th>`+
+        T.all_rarities.map(r=>`<td><button type="button" data-k="${v}|${r}" style="--rc:${rc(r)}" aria-label="${v} ${r}">${TICK}</button></td>`).join("")+`</tr>`).join("")+`</tbody>`;
+    g.dataset.built=sig;
+  }
+  if(!busy("dt-grid"))g.querySelectorAll("td button").forEach(b=>b.setAttribute("aria-pressed",String(T.combos.includes(b.dataset.k))));
+}
+$("dt-grid").addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b)return;
+  const g=$("dt-grid");
+  let cells;
+  if(b.dataset.k) cells=[b];
+  else if(b.dataset.row) cells=[...g.querySelectorAll(`td button[data-k^="${b.dataset.row}|"]`)];
+  else cells=[...g.querySelectorAll(`td button[data-k$="|${b.dataset.col}"]`)];
+  const on=!cells.every(c=>c.getAttribute("aria-pressed")==="true");
+  cells.forEach(c=>c.setAttribute("aria-pressed",String(on)));
+  setting("tracker_combos",[...g.querySelectorAll('td button[aria-pressed="true"]')].map(c=>c.dataset.k),"dt-grid");
+});
+$("dt-on").addEventListener("change",e=>setting("tracker_on",e.target.checked,"dt-on"));
+$("dt-sound").addEventListener("change",e=>setting("tracker_sound",e.target.checked,"dt-sound"));
+$("dt-secs").addEventListener("input",e=>{touched["dt-secs"]=Date.now();$("dt-secs-v").textContent=e.target.value+" s"});
+$("dt-secs").addEventListener("change",e=>setting("tracker_seconds",+e.target.value,"dt-secs"));
+$("dt-test").addEventListener("click",()=>action("tracker_test"));
+function tName(T,v,r){
+  const vv=v==="Rainbow"?`<b class="rainbow-t">${v}</b>`:`<b style="color:${tColor(T,v)}">${v}</b>`;
+  return `${vv} <span style="color:${tColor(T,r,true)}">${r}</span>`;
+}
+function renderTracker(){
+  const T=S.tracker; if(!T)return;
+  chk("dt-on",T.on); chk("dt-sound",T.sound);
+  if(!busy("dt-secs")){val("dt-secs",T.seconds);$("dt-secs-v").textContent=T.seconds+" s"}
+  tGrid(T);
+  txt("dt-run",T.on&&T.combos.length?"On":"Off");
+  const by={}; T.combos.forEach(k=>{const [v,r]=k.split("|");(by[v]=by[v]||[]).push(r)});
+  const parts=Object.keys(by).map(v=>by[v].length===T.all_rarities.length?`every ${v}`:`${v} ${by[v].join("/")}`);
+  txt("dt-summary",parts.length?`Alerts for: ${parts.join(", ")}.`:"Nothing ticked yet.");
+  const log=T.recent.length?T.recent.map(e=>`<div class="${e.hit?"hit":""}"><time>${e.t}</time><span>${tName(T,e.v,e.r)}</span></div>`).join(""):
+    `<p class="note">Nothing seen yet. Spawns show up here as the game announces them.</p>`;
+  if($("dt-log").dataset.k!==log){$("dt-log").innerHTML=log;$("dt-log").dataset.k=log}
+}
 function renderScanner(){
   const i=S.inventory;
   if(!busy("i-kyber"))seg("i-kyber",i.kyber_default);
@@ -1954,7 +2056,7 @@ async function poll(){
   if(first){first=false;show(store.get("page",S.running?S.mode:"inv"));init()}
   if(lastDataVer!==null&&S.data_version!==lastDataVer){APP.picVer=S.data_version;if(!dirty.size)APP.loadPlayers()}
   lastDataVer=S.data_version;
-  renderHeader();renderFoot();renderFishing();renderTraits();renderClicker();renderScanner();renderHotkeys();renderSettings();
+  renderHeader();renderFoot();renderFishing();renderTraits();renderClicker();renderScanner();renderTracker();renderHotkeys();renderSettings();
 }
 setInterval(poll,700);poll();
 })();

@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.9.7"
+VERSION = "1.9.9"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -195,6 +195,11 @@ DEFAULTS = {
     "timers_on": True,
     "timers_within": 5,         # minutes before a drop that the timer shows up
     "timers": {"Kyber": [15], "Mythic": [55], "Stellar": [5, 35]},
+    # --- Droid Tracker: big alert when a picked variant/rarity spawns at the Sandcrawler ---
+    "tracker_on": False,
+    "tracker_combos": [],       # "Variant|Rarity" pairs to alert on, e.g. ["Stellar|Legendary"]
+    "tracker_sound": False,     # beep with the alert
+    "tracker_seconds": 6,       # how long the alert stays up
     # --- Overlay ---
     "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
     "overlay": True,            # show the on-screen info box
@@ -239,6 +244,12 @@ if cfg["allowed_keys"] == "EFZQ":  # older config files - the game added C
     cfg["allowed_keys"] = "EFZQC"
 if cfg.get("overlay_y") == 120:      # old default spot -> new spot under the name/ID line
     cfg["overlay_y"] = None
+if cfg.get("tracker_variants") and not cfg.get("tracker_combos"):   # v1.9.8 picks -> grid
+    cfg["tracker_combos"] = [f"{v}|{r}" for v in cfg["tracker_variants"]
+                             for r in (cfg.get("tracker_rarities") or
+                                       ["Common", "Rare", "Epic", "Legendary", "Mythic", "Iconic"])]
+cfg.pop("tracker_variants", None)
+cfg.pop("tracker_rarities", None)
 if cfg.get("mini_y") == 8:
     cfg["mini_y"] = None
 _saved_hotkeys = cfg.get("hotkeys") if cfg.get("hotkeys") is not DEFAULTS["hotkeys"] else None
@@ -3068,6 +3079,165 @@ def _run_clicker():
             next_click = time.perf_counter()
 
 
+# ----------------------------------------------------------- droid tracker ---
+# The game posts "<Variant> Droid (<Rarity>) spawned at the Sandcrawler" on the left of
+# the screen for Diamond and better. Read it and put up a big alert for the ones picked.
+
+TRACK_VARIANTS = ["Diamond", "Rainbow", "Beskar", "Galactic", "Stellar", "Kyber", "Scourge"]
+TRACK_RARITIES = ["Common", "Rare", "Epic", "Legendary", "Mythic", "Iconic"]
+_FEED_VARIANTS = ["Basic", "Gold"] + TRACK_VARIANTS
+VARIANT_COLORS = {"Diamond": "#3fa9ff", "Beskar": "#d0d5dc", "Galactic": "#b57bff",
+                  "Stellar": "#ffd76a", "Kyber": "#1fbf9a", "Scourge": "#ff4d4d",
+                  "Gold": "#ffcc33", "Basic": "#d0d5dc"}
+RAINBOW_COLORS = ["#ff6b9d", "#c779ff", "#5d8bff", "#3fc6ff", "#2fd38a", "#a8e04a", "#ffd23f",
+                  "#ff9f40", "#ff6b6b"]
+RARITY_COLORS = {"Common": "#e8e8e8", "Rare": "#4aa3ff", "Epic": "#b57bff",
+                 "Legendary": "#ffa53a", "Mythic": "#ff7ac8", "Iconic": "#ffe14d"}
+
+_track = {"recent": [], "alerts": [], "last_seen": {}, "sig": None, "sig_found": [],
+          "sig_time": 0.0}
+
+
+def feed_image(img, thr):
+    """Black-on-white picture of the spawn messages: the game outlines its text in a
+    dark colour, so the letters are the light areas fully enclosed by that outline."""
+    H, W = img.shape[:2]
+    roi = img[int(H * 0.44):int(H * 0.62), int(W * 0.005):int(W * 0.36)]
+    V = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)[:, :, 2]
+    light = (V >= thr).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(light, connectivity=4)
+    h_, w_ = light.shape
+    hi, lo = max(30, int(H * 0.028)), max(4, int(H * 0.004))
+    ok = np.zeros(n, bool)
+    for i in range(1, n):
+        x, y, w, h, _a = st[i]
+        ok[i] = x > 0 and y > 0 and x + w < w_ and y + h < h_ and lo <= h <= hi
+    sc = 2160 / H if H < 2000 else 1.0
+    return cv2.resize(np.where(ok[lab], 0, 255).astype(np.uint8), None, fx=sc, fy=sc,
+                      interpolation=cv2.INTER_LINEAR)
+
+
+def feed_has_text(feed):
+    """A line of letters (20+ letter-sized shapes in one row) - cheap check before OCR."""
+    ink = (feed < 128).astype(np.uint8)
+    n, _lab, st, _ = cv2.connectedComponentsWithStats(ink)
+    if n < 21:
+        return False
+    tall = st[1:, 3] >= feed.shape[0] * 0.025
+    ys = st[1:, 1][tall]
+    band = int(feed.shape[0] * 0.1)
+    return any(((ys >= y) & (ys < y + band)).sum() >= 20 for y in range(0, feed.shape[0], band // 4 or 1))
+
+
+def _snap_word(word, opts):
+    import difflib
+    word = re.sub(r"[^A-Za-z]", "", word).capitalize()
+    if len(word) < 2:
+        return None
+    best = max(opts, key=lambda o: difflib.SequenceMatcher(None, word, o).ratio())
+    if difflib.SequenceMatcher(None, word, best).ratio() >= 0.6:
+        return best
+    m = [o for o in opts if word.lower() in o.lower()] if len(word) >= 3 else []
+    return m[0] if len(m) == 1 else None
+
+
+def parse_feed(text):
+    """'Rainbow Droid (Legendary) spawned at the Sandcrawler' -> [("Rainbow", "Legendary")].
+    Anchored on 'spawned' (white text, reads well); the coloured words may be rough."""
+    out = []
+    for line in text.splitlines():
+        m = re.search(r"[sfgMm]?[pfa]?awn|awned|pawn|wned", line, re.I)
+        if not m:
+            continue
+        words = [w for w in re.findall(r"[A-Za-z]+", line[:m.start()]) if len(w) >= 3]
+        if len(words) < 2:
+            continue
+        r = _snap_word(words[-1], TRACK_RARITIES)
+        rest = [w for w in words[:-1] if _snap_word(w, ["Droid"]) != "Droid"]
+        v = None
+        for cand in ([rest[0]] if rest else []) + (["".join(rest[:2])] if len(rest) > 1 else []):
+            v = _snap_word(cand, _FEED_VARIANTS)
+            if v:
+                break
+        if v and r and (v, r) not in out:
+            out.append((v, r))
+    return out
+
+
+def read_feed(img):
+    """[(variant, rarity), ...] for the spawn messages on screen right now."""
+    first = feed_image(img, 150)
+    if not feed_has_text(first):
+        return None                                # no message showing
+    sig = cv2.resize(first, (64, 16), interpolation=cv2.INTER_AREA).astype(np.int16)
+    t = _track
+    if (t["sig"] is not None and t["sig_found"] and time.time() - t["sig_time"] < 4
+            and np.abs(sig - t["sig"]).mean() < 6):
+        return list(t["sig_found"])                # same message as last time: skip the OCR
+    found, lines = [], 0
+    for thr in (150, 170, 190):
+        im = first if thr == 150 else feed_image(img, thr)
+        text = pytesseract.image_to_string(im, config="--psm 6")
+        lines = max(lines, sum(1 for l in text.splitlines()
+                               if re.search(r"[sfgMm]?[pfa]?awn|awned|pawn|wned", l, re.I)))
+        for p in parse_feed(text):
+            if p not in found:
+                found.append(p)
+        if found and len(found) >= lines:          # every message line accounted for
+            break
+    complete = bool(found) and len(found) >= lines
+    t["sig"], t["sig_found"], t["sig_time"] = sig, (found if complete else []), time.time()
+    return found
+
+
+def tracker_wants(v, r):
+    return f"{v}|{r}" in (cfg.get("tracker_combos") or [])
+
+
+def tracker_alert(v, r, test=False):
+    _track["alerts"] = ([a for a in _track["alerts"] if a["until"] > time.time()]
+                        + [{"v": v, "r": r, "until": time.time() + cfg.get("tracker_seconds", 6),
+                            "test": test}])[-3:]
+    if cfg.get("tracker_sound") and sys.platform == "win32":
+        try:
+            import winsound
+            winsound.MessageBeep(0x30)
+        except Exception:
+            pass
+
+
+def tracker_watch():
+    """Look at the spawn messages about once a second while Fortnite is in front."""
+    sct = None
+    while not state["quit"]:
+        time.sleep(0.5)
+        if not cfg.get("tracker_on") or not cfg.get("tracker_combos"):
+            time.sleep(1)
+            continue
+        if not game_in_front():
+            continue
+        try:
+            sct = sct or mss.mss()
+            found = read_feed(grab_screen(sct))
+        except Exception as e:
+            print("Droid Tracker read failed:", e)
+            sct = None
+            time.sleep(3)
+            continue
+        now = time.time()
+        for v, r in found or []:
+            key = v + "|" + r
+            new = now - _track["last_seen"].get(key, 0) > 5
+            _track["last_seen"][key] = now
+            if not new:
+                continue
+            hit = tracker_wants(v, r)
+            _track["recent"] = ([{"t": now, "v": v, "r": r, "hit": hit}] + _track["recent"])[:30]
+            print(f"Droid Tracker: {v} {r} spawned" + (" - ALERT" if hit else ""))
+            if hit:
+                tracker_alert(v, r)
+
+
 # ---------------------------------------------------------------- windows ---
 
 BG, FG, DIM = "#14171c", "#e8e8e8", "#8a9099"
@@ -3475,6 +3645,72 @@ def run_windows():
             tshown["on"] = True
         twin.attributes("-topmost", True)
 
+    # Droid Tracker alert: big banner at the top middle of the screen
+    bwin = tk.Toplevel(root)
+    bwin.overrideredirect(True)
+    bwin.attributes("-topmost", True)
+    bwin.attributes("-alpha", 0.95)
+    bwin.configure(bg=BG)
+    bbox = tk.Frame(bwin, bg=BG, padx=22, pady=10, highlightthickness=2,
+                    highlightbackground="#ffd76a")
+    bbox.pack()
+    bwin.withdraw()
+    make_click_through(bwin)
+    bshown = {"on": False, "key": "", "pos": ""}
+
+    def banner_rows(alerts):
+        for w in bbox.winfo_children():
+            w.destroy()
+        tk.Label(bbox, bg=BG, fg=DIM, font=("Segoe UI", 10, "bold"),
+                 text="DROID TRACKER  \u00b7  ON THE BELT").pack()
+        for a in reversed(alerts):                    # newest on top
+            row = tk.Frame(bbox, bg=BG)
+            row.pack(pady=(2, 0))
+            big = ("Segoe UI", 26, "bold")
+            word = a["v"].upper()
+            if a["v"] == "Rainbow":
+                for i, ch in enumerate(word):
+                    tk.Label(row, bg=BG, fg=RAINBOW_COLORS[i % len(RAINBOW_COLORS)], font=big,
+                             text=ch, padx=0, bd=0).pack(side="left")
+            else:
+                tk.Label(row, bg=BG, fg=VARIANT_COLORS.get(a["v"], FG), font=big, text=word,
+                         bd=0).pack(side="left")
+            tk.Label(row, bg=BG, fg=DIM, font=big, text=" \u00b7 ", bd=0).pack(side="left")
+            tk.Label(row, bg=BG, fg=RARITY_COLORS.get(a["r"], FG), font=big,
+                     text=a["r"].upper(), bd=0).pack(side="left")
+            if a.get("test"):
+                tk.Label(row, bg=BG, fg=DIM, font=("Segoe UI", 11), text="  (test)").pack(side="left")
+        bbox.config(highlightbackground=VARIANT_COLORS.get(alerts[-1]["v"], "#ffd76a")
+                    if alerts[-1]["v"] != "Rainbow" else "#ff6b9d")
+
+    def refresh_banner(game_front):
+        now = time.time()
+        alerts = [a for a in _track["alerts"] if a["until"] > now]
+        want = (bool(alerts) and (game_front or any(a.get("test") for a in alerts))
+                and not state["capture_hide"])
+        if not want:
+            if bshown["on"]:
+                bwin.withdraw()
+                bshown["on"] = False
+            return
+        key = repr([(a["v"], a["r"], a["until"]) for a in alerts])
+        if key != bshown["key"]:
+            banner_rows(alerts)
+            bshown["key"] = key
+        bwin.update_idletasks()
+        mon = screen()
+        x = mon["left"] + (mon["width"] - bwin.winfo_reqwidth()) // 2
+        y = mon["top"] + int(mon["height"] * 0.07)
+        pos = f"+{x}+{y}"
+        if pos != bshown["pos"]:
+            bwin.geometry(pos)
+            bshown["pos"] = pos
+        if not bshown["on"]:
+            bwin.deiconify()
+            make_click_through(bwin)
+            bshown["on"] = True
+        bwin.attributes("-topmost", True)
+
     shown = ["full"]
     placed = [""]
 
@@ -3585,6 +3821,7 @@ def run_windows():
                                     or want_inv or (toast and cfg["overlay"]) else "none")
         front = game_in_front()
         refresh_timers(front)
+        refresh_banner(front)
         if not front and not state.get("area_open"):
             view = "none"                        # another window is in front - stay out of the way
         if state["capture_hide"]:
@@ -4098,6 +4335,17 @@ def panel_state():
         "hotkeys": [{"id": a, "label": label, "key": hk(a), "pretty": hk_label(a)}
                     for a, label in HOTKEY_ACTIONS],
         "capture": state["hk_capture"], "capture_error": state["hk_error"],
+        "tracker": {
+            "on": cfg.get("tracker_on", False),
+            "combos": cfg.get("tracker_combos", []),
+            "sound": cfg.get("tracker_sound", False),
+            "seconds": cfg.get("tracker_seconds", 6),
+            "all_variants": TRACK_VARIANTS,
+            "all_rarities": TRACK_RARITIES,
+            "colors": {**VARIANT_COLORS, **{"r_" + k: c for k, c in RARITY_COLORS.items()}},
+            "recent": [{"t": time.strftime("%I:%M:%S %p", time.localtime(e["t"])).lstrip("0"),
+                        "v": e["v"], "r": e["r"], "hit": e["hit"]} for e in _track["recent"]],
+        },
         "settings": {
             "monitor": str(cfg.get("monitor", "auto")),
             "monitors": [{"id": str(i), "label": f"Screen {i} – {m['width']}×{m['height']}"
@@ -4203,6 +4451,19 @@ def panel_set(key, value):
         if not mins:
             return "Enter at least one minute, e.g. 15 or 5, 35"
         cfg["timers"][value["name"]] = mins
+    elif key in ("tracker_on", "tracker_sound"):
+        if key == "tracker_on" and _as_bool(value) and not cfg.get("tracker_combos"):
+            return "Tick at least one droid to track first"
+        cfg[key] = _as_bool(value)
+    elif key == "tracker_combos":
+        if not isinstance(value, list):
+            return "bad value"
+        want = set(value)
+        cfg[key] = [f"{v}|{r}" for v in TRACK_VARIANTS for r in TRACK_RARITIES if f"{v}|{r}" in want]
+        if not cfg[key]:
+            cfg["tracker_on"] = False              # nothing left to track
+    elif key == "tracker_seconds":
+        cfg[key] = int(_clamp_num(value, 3, 20))
     elif key == "interact_key":
         k = str(value).strip().lower()
         if not re.fullmatch(r"[a-z0-9]", k):
@@ -4259,6 +4520,10 @@ def panel_action(name, data):
         cfg["inv_add_key"], cfg["inv_remove_key"] = hk("inv_add"), hk("inv_remove")
         save_config()
         notify("Hotkeys reset to the defaults", 3)
+        return ""
+    if name == "tracker_test":
+        v, r = (cfg.get("tracker_combos") or ["Rainbow|Legendary"])[-1].split("|")
+        tracker_alert(v, r, test=True)
         return ""
     if name == "check_update":
         threading.Thread(target=check_for_update, args=(True,), daemon=True).start()
@@ -5021,6 +5286,7 @@ def main():
     listener = keyboard.Listener(on_press=on_key)
     listener.start()
     threading.Thread(target=rebirth_watch, daemon=True).start()
+    threading.Thread(target=tracker_watch, daemon=True).start()
 
     def clock_loop():
         while not state["quit"]:
