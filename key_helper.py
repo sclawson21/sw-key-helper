@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.10.2"
+VERSION = "1.10.3"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -3792,7 +3792,7 @@ def run_windows():
         twin.update_idletasks()
         mon = screen()
         x = mon["left"] + int(mon["width"] * 0.986) - twin.winfo_reqwidth()
-        y = mon["top"] + int(mon["height"] * 0.716)     # just under the NEXT MISSION bar
+        y = mon["top"] + int(mon["height"] * 0.732)     # under the NEXT MISSION bar, with a gap
         pos = f"+{x}+{y}"
         if pos != tshown["pos"]:
             twin.geometry(pos)
