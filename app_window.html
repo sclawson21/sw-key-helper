@@ -643,6 +643,8 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
             <div class="card">
               <h3>Droidex Tracker Notification <span class="sub" id="dt-dx-run"></span></h3>
               <label class="switch"><input type="checkbox" id="dt-dx"><span>Play the sound when the Droidex tracker pops up<small>The droid card with the yellow "!" on the right side of the screen. One sound each time it appears.</small></span></label>
+              <div class="row"><button class="btn" id="dt-pings" type="button">Open ping pictures</button></div>
+              <p class="note">Each Droidex ping saves a screenshot (the last 5 are kept). If you get a ping with no popup, send me that picture.</p>
             </div>
             <div class="card">
               <h3>Notification sound</h3>
@@ -660,7 +662,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
               <p class="note" id="dt-summary"></p>
             </div>
             <div class="card" style="grid-column:1/-1">
-              <h3>Spawned this session <span class="sub">Highlighted ones set off an alert</span></h3>
+              <h3>This session <span class="sub">Spawns read from the left of the screen, plus Droidex pings. Highlighted = you got a notification</span></h3>
               <div class="tlog" id="dt-log"></div>
             </div>
           </div>
@@ -1976,6 +1978,7 @@ $("dt-grid").addEventListener("click",e=>{
 });
 $("dt-on").addEventListener("change",e=>setting("tracker_on",e.target.checked,"dt-on"));
 $("dt-sound").addEventListener("change",e=>setting("tracker_sound",e.target.checked,"dt-sound"));
+$("dt-pings").addEventListener("click",()=>action("open_pings"));
 $("dt-dx").addEventListener("change",e=>setting("droidex_notify",e.target.checked,"dt-dx"));
 $("dt-tones").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   $("dt-tones").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
@@ -2003,7 +2006,7 @@ function renderTracker(){
   const by={}; T.combos.forEach(k=>{const [v,r]=k.split("|");(by[v]=by[v]||[]).push(r)});
   const parts=Object.keys(by).map(v=>by[v].length===T.all_rarities.length?`every ${v}`:`${v} ${by[v].join("/")}`);
   txt("dt-summary",parts.length?`Alerts for: ${parts.join(", ")}.`:"Nothing ticked yet.");
-  const log=T.recent.length?T.recent.map(e=>`<div class="${e.hit?"hit":""}"><time>${e.t}</time><span>${tName(T,e.v,e.r)}</span></div>`).join(""):
+  const log=T.recent.length?T.recent.map(e=>`<div class="${e.hit?"hit":""}"><time>${e.t}</time><span>${e.kind==="droidex"?"<b>Droidex tracker popup</b> <span class=\"note\" style=\"display:inline\">sound played</span>":tName(T,e.v,e.r)}</span></div>`).join(""):
     `<p class="note">Nothing seen yet. Spawns show up here as the game announces them.</p>`;
   if($("dt-log").dataset.k!==log){$("dt-log").innerHTML=log;$("dt-log").dataset.k=log}
 }

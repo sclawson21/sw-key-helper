@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.10.1"
+VERSION = "1.10.2"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -3309,16 +3309,44 @@ def droid_alert_badge(img):
         drk = cv2.countNonZero(cv2.bitwise_and(dark, inside)) / n_in
         core = cv2.circle(np.zeros_like(yellow), (int(cx), int(cy)), int(r * 0.45), 255, -1)
         mid = cv2.countNonZero(cv2.bitwise_and(dark, core)) / max(1, cv2.countNonZero(core))
-        if 0.55 <= yel <= 0.95 and 0.04 <= drk <= 0.30 and mid >= 0.08:   # yellow with a dark '!'
-            return x0 + cx, y0 + cy, r
+        if not (0.55 <= yel <= 0.95 and 0.04 <= drk <= 0.30 and mid >= 0.08):
+            continue                                                  # not yellow with dark middle
+        # the real badge has a dark ring round it and a tall, centred '!'
+        icx, icy = int(cx), int(cy)
+        ring = (cv2.circle(np.zeros_like(yellow), (icx, icy), int(r * 1.22), 255, -1)
+                & ~cv2.circle(np.zeros_like(yellow), (icx, icy), int(r * 1.02), 255, -1))
+        if cv2.countNonZero(dark & ring) / max(1, cv2.countNonZero(ring)) < 0.5:
+            continue
+        ys, xs = np.nonzero(dark & cv2.circle(np.zeros_like(yellow), (icx, icy), int(r * 0.7), 255, -1))
+        if not len(xs):
+            continue
+        tall = (ys.max() - ys.min() + 1) / (xs.max() - xs.min() + 1)
+        if tall < 1.4 or abs(xs.mean() - cx) > 0.2 * r:
+            continue
+        return x0 + cx, y0 + cy, r
     return None
+
+
+def save_ping_picture(img):
+    """Keep the last 5 screenshots that set off the Droidex sound (pings/ folder), so a
+    wrong ping can be checked."""
+    try:
+        folder = os.path.join(BASE_DIR, "pings")
+        os.makedirs(folder, exist_ok=True)
+        cv2.imwrite(os.path.join(folder, time.strftime("droidex_%Y-%m-%d_%H-%M-%S.jpg")), img,
+                    [cv2.IMWRITE_JPEG_QUALITY, 80])
+        old = sorted(f for f in os.listdir(folder) if f.startswith("droidex_"))
+        for f in old[:-5]:
+            os.remove(os.path.join(folder, f))
+    except Exception as e:
+        print("Couldn't save the ping picture:", e)
 
 
 def tracker_watch():
     """About twice a second while Fortnite is in front: read the Sandcrawler spawn
     messages (left) and look for the Droidex tracker popup (right)."""
     sct = None
-    badge_seen, badge_misses = False, 0
+    badge_seen, badge_misses, badge_hits = False, 0, 0
     while not state["quit"]:
         time.sleep(0.5)
         spawns = cfg.get("tracker_on") and cfg.get("tracker_combos")
@@ -3340,14 +3368,20 @@ def tracker_watch():
             continue
         if badge:
             badge_misses = 0
-            if not badge_seen:                         # popup just appeared: one sound
+            badge_hits += 1
+            if not badge_seen and badge_hits >= 2:     # popup is really up: one sound
                 badge_seen = True
                 print("Droidex tracker popup - playing the alert sound")
+                _track["recent"] = ([{"t": time.time(), "v": "Droidex tracker popup", "r": "",
+                                      "hit": True, "kind": "droidex"}] + _track["recent"])[:30]
+                save_ping_picture(img)
                 play_alert_sound()
-        elif badge_seen:
-            badge_misses += 1
-            if badge_misses >= 3:                      # gone: ready for the next one
-                badge_seen = False
+        else:
+            badge_hits = 0
+            if badge_seen:
+                badge_misses += 1
+                if badge_misses >= 3:                  # gone: ready for the next one
+                    badge_seen = False
         now = time.time()
         for v, r in found or []:
             key = v + "|" + r
@@ -4472,7 +4506,8 @@ def panel_state():
             "all_rarities": TRACK_RARITIES,
             "colors": {**VARIANT_COLORS, **{"r_" + k: c for k, c in RARITY_COLORS.items()}},
             "recent": [{"t": time.strftime("%I:%M:%S %p", time.localtime(e["t"])).lstrip("0"),
-                        "v": e["v"], "r": e["r"], "hit": e["hit"]} for e in _track["recent"]],
+                        "v": e["v"], "r": e["r"], "hit": e["hit"], "kind": e.get("kind", "spawn")}
+                       for e in _track["recent"]],
         },
         "settings": {
             "monitor": str(cfg.get("monitor", "auto")),
@@ -4656,6 +4691,12 @@ def panel_action(name, data):
         cfg["inv_add_key"], cfg["inv_remove_key"] = hk("inv_add"), hk("inv_remove")
         save_config()
         notify("Hotkeys reset to the defaults", 3)
+        return ""
+    if name == "open_pings":
+        folder = os.path.join(BASE_DIR, "pings")
+        os.makedirs(folder, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(folder)
         return ""
     if name == "tracker_preview":
         threading.Thread(target=play_alert_sound, args=(data.get("tone"),), daemon=True).start()
