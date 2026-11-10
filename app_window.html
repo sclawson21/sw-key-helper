@@ -84,7 +84,7 @@ button{cursor:pointer}
 .tgrid td button[aria-pressed="true"]{background:var(--rc);border-color:var(--rc)}
 .tgrid td button[aria-pressed="true"] svg{opacity:1}
 .tgrid button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-#dt-soundbox.dim{opacity:.55}
+.sys .col{display:flex;flex-direction:column;gap:14px;min-width:0}
 .tlog{display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}
 .tlog div{display:flex;gap:12px;align-items:baseline;padding:5px 10px;border-radius:7px;font-size:.88rem}
 .tlog div.hit{background:color-mix(in srgb,var(--accent) 14%,transparent)}
@@ -629,20 +629,29 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
         <!-- DROID TRACKER -->
         <section class="page" id="p-track">
           <div class="grid">
+            <div class="col">
             <div class="card">
-              <h3>Alerts <span class="sub" id="dt-run"></span></h3>
-              <label class="switch"><input type="checkbox" id="dt-on"><span>Alert me when a tracked droid spawns<small>Works any time Fortnite is in front. No macro needs to be running.</small></span></label>
-              <label class="switch"><input type="checkbox" id="dt-sound"><span>Play a sound with the alert</span></label>
-              <div class="field" id="dt-soundbox"><span class="lbl">Sound <span class="note" style="display:inline">&middot; click one to hear it</span></span>
-                <div class="tpick" id="dt-tones"></div>
-                <div class="row" style="flex-wrap:nowrap;margin-top:6px"><label for="dt-vol" class="note" style="white-space:nowrap">Volume</label><input type="range" id="dt-vol" min="10" max="100" step="5"><span class="rangeval" id="dt-vol-v"></span></div>
-              </div>
+              <h3>Sandcrawler Spawn Notification <span class="sub" id="dt-run"></span></h3>
+              <label class="switch"><input type="checkbox" id="dt-on"><span>Big alert when a tracked droid spawns<small>Reads the "&hellip; spawned at the Sandcrawler" messages on the left of the screen (Diamond and better). Pick the droids in Track these.</small></span></label>
+              <label class="switch"><input type="checkbox" id="dt-sound"><span>Play the sound with the alert</span></label>
               <div class="field">
                 <label for="dt-secs">Keep the alert up for</label>
                 <div class="row" style="flex-wrap:nowrap"><input type="range" id="dt-secs" min="3" max="20" step="1"><span class="rangeval" id="dt-secs-v"></span></div>
               </div>
               <div class="row"><button class="btn" id="dt-test" type="button">Show a test alert</button></div>
-              <p class="note">It reads the "&hellip; spawned at the Sandcrawler" messages on the left of the screen. The game posts those for Diamond and better.</p>
+            </div>
+            <div class="card">
+              <h3>Droidex Tracker Notification <span class="sub" id="dt-dx-run"></span></h3>
+              <label class="switch"><input type="checkbox" id="dt-dx"><span>Play the sound when the Droidex tracker pops up<small>The droid card with the yellow "!" on the right side of the screen. One sound each time it appears.</small></span></label>
+            </div>
+            <div class="card">
+              <h3>Notification sound</h3>
+              <div class="field"><span class="lbl">Sound <span class="note" style="display:inline">&middot; click one to hear it</span></span>
+                <div class="tpick" id="dt-tones"></div>
+              </div>
+              <div class="row" style="flex-wrap:nowrap"><label for="dt-vol" class="note" style="white-space:nowrap">Volume</label><input type="range" id="dt-vol" min="10" max="100" step="5"><span class="rangeval" id="dt-vol-v"></span></div>
+              <p class="note">Both notifications use this sound. They work any time Fortnite is in front, with or without a macro running.</p>
+            </div>
             </div>
             <div class="card">
               <h3>Track these</h3>
@@ -1808,7 +1817,7 @@ function renderHeader(){
   if(S.running){go.hidden=false;go.textContent="■ Stop "+(MODE_NAMES[S.mode]||"");go.classList.add("stop")}
   else if(sysMode){go.hidden=false;go.textContent="▶ Start "+MODE_NAMES[sysMode];go.classList.remove("stop")}
   else go.hidden=true;
-  document.querySelectorAll(".sb-i[data-page]").forEach(b=>b.classList.toggle("running",b.dataset.page==="track"?!!(S.tracker&&S.tracker.on&&S.tracker.combos.length):S.running&&b.dataset.page===S.mode));
+  document.querySelectorAll(".sb-i[data-page]").forEach(b=>b.classList.toggle("running",b.dataset.page==="track"?!!(S.tracker&&((S.tracker.on&&S.tracker.combos.length)||S.tracker.droidex)):S.running&&b.dataset.page===S.mode));
   const m=$("msgbar"), text=S.error||(S.message_age<10?S.message:"");
   m.hidden=!text; if(text&&m.textContent!==text)m.textContent=text; m.classList.toggle("err",!!S.error);
   txt("sb-ver","v"+S.version); txt("sb-acct",S.account.username||"");
@@ -1967,6 +1976,7 @@ $("dt-grid").addEventListener("click",e=>{
 });
 $("dt-on").addEventListener("change",e=>setting("tracker_on",e.target.checked,"dt-on"));
 $("dt-sound").addEventListener("change",e=>setting("tracker_sound",e.target.checked,"dt-sound"));
+$("dt-dx").addEventListener("change",e=>setting("droidex_notify",e.target.checked,"dt-dx"));
 $("dt-tones").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
   $("dt-tones").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
   setting("tracker_tone",b.dataset.v,"dt-tones"); action("tracker_preview",{tone:b.dataset.v})});
@@ -1986,7 +1996,7 @@ function renderTracker(){
   if(tb.dataset.built!==T.tones.map(x=>x.id).join()){tb.innerHTML=T.tones.map(x=>`<button type="button" data-v="${x.id}" style="--c:var(--accent)"><i></i>${x.name}</button>`).join("");tb.dataset.built=T.tones.map(x=>x.id).join()}
   if(!busy("dt-tones"))tb.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.v===T.tone)));
   if(!busy("dt-vol")){val("dt-vol",T.volume);$("dt-vol-v").textContent=T.volume+"%"}
-  $("dt-soundbox").classList.toggle("dim",!T.sound);
+  chk("dt-dx",T.droidex); txt("dt-dx-run",T.droidex?"On":"Off");
   if(!busy("dt-secs")){val("dt-secs",T.seconds);$("dt-secs-v").textContent=T.seconds+" s"}
   tGrid(T);
   txt("dt-run",T.on&&T.combos.length?"On":"Off");

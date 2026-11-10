@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -202,6 +202,7 @@ DEFAULTS = {
     "tracker_tone": "high_bell",  # which sound (see ALERT_SOUNDS)
     "tracker_volume": 70,       # 10-100 %
     "tracker_seconds": 6,       # how long the alert stays up
+    "droidex_notify": False,    # play the alert sound when the Droidex tracker card pops up (right side)
     # --- Overlay ---
     "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
     "overlay": True,            # show the on-screen info box
@@ -3285,24 +3286,68 @@ def play_alert_sound(name=None):
         print("Alert sound failed:", e)
 
 
+def droid_alert_badge(img):
+    """The Droidex tracker popup on the right (a droid card with a big yellow '!' badge,
+    above the PROTOCOL CRATE box). Returns (x, y, radius) of the badge or None."""
+    H, W = img.shape[:2]
+    x0, x1, y0, y1 = int(W * 0.84), int(W * 0.995), int(H * 0.28), int(H * 0.52)
+    hsv = cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+    yellow = cv2.inRange(hsv, (18, 140, 170), (36, 255, 255))
+    dark = ((hsv[:, :, 2] < 90) * 255).astype(np.uint8)
+    cnts, _ = cv2.findContours(yellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for c in cnts:
+        (cx, cy), r = cv2.minEnclosingCircle(c)
+        if not (0.025 * H <= r <= 0.065 * H):
+            continue
+        filled = np.zeros_like(yellow)
+        cv2.drawContours(filled, [c], -1, 255, -1)
+        if cv2.countNonZero(filled) / (np.pi * r * r) < 0.72:        # not round
+            continue
+        inside = cv2.circle(np.zeros_like(yellow), (int(cx), int(cy)), int(r * 0.85), 255, -1)
+        n_in = max(1, cv2.countNonZero(inside))
+        yel = cv2.countNonZero(cv2.bitwise_and(yellow, inside)) / n_in
+        drk = cv2.countNonZero(cv2.bitwise_and(dark, inside)) / n_in
+        core = cv2.circle(np.zeros_like(yellow), (int(cx), int(cy)), int(r * 0.45), 255, -1)
+        mid = cv2.countNonZero(cv2.bitwise_and(dark, core)) / max(1, cv2.countNonZero(core))
+        if 0.55 <= yel <= 0.95 and 0.04 <= drk <= 0.30 and mid >= 0.08:   # yellow with a dark '!'
+            return x0 + cx, y0 + cy, r
+    return None
+
+
 def tracker_watch():
-    """Look at the spawn messages about once a second while Fortnite is in front."""
+    """About twice a second while Fortnite is in front: read the Sandcrawler spawn
+    messages (left) and look for the Droidex tracker popup (right)."""
     sct = None
+    badge_seen, badge_misses = False, 0
     while not state["quit"]:
         time.sleep(0.5)
-        if not cfg.get("tracker_on") or not cfg.get("tracker_combos"):
+        spawns = cfg.get("tracker_on") and cfg.get("tracker_combos")
+        droidex = cfg.get("droidex_notify")
+        if not (spawns or droidex):
             time.sleep(1)
             continue
         if not game_in_front():
             continue
         try:
             sct = sct or mss.mss()
-            found = read_feed(grab_screen(sct))
+            img = grab_screen(sct)
+            badge = droid_alert_badge(img) if droidex else None
+            found = read_feed(img) if spawns else None
         except Exception as e:
             print("Droid Tracker read failed:", e)
             sct = None
             time.sleep(3)
             continue
+        if badge:
+            badge_misses = 0
+            if not badge_seen:                         # popup just appeared: one sound
+                badge_seen = True
+                print("Droidex tracker popup - playing the alert sound")
+                play_alert_sound()
+        elif badge_seen:
+            badge_misses += 1
+            if badge_misses >= 3:                      # gone: ready for the next one
+                badge_seen = False
         now = time.time()
         for v, r in found or []:
             key = v + "|" + r
@@ -4419,6 +4464,7 @@ def panel_state():
             "combos": cfg.get("tracker_combos", []),
             "sound": cfg.get("tracker_sound", False),
             "tone": cfg.get("tracker_tone", "high_bell"),
+            "droidex": cfg.get("droidex_notify", False),
             "volume": cfg.get("tracker_volume", 70),
             "tones": [{"id": k, "name": n} for k, n in ALERT_SOUNDS],
             "seconds": cfg.get("tracker_seconds", 6),
@@ -4533,6 +4579,8 @@ def panel_set(key, value):
         if not mins:
             return "Enter at least one minute, e.g. 15 or 5, 35"
         cfg["timers"][value["name"]] = mins
+    elif key == "droidex_notify":
+        cfg[key] = _as_bool(value)
     elif key in ("tracker_on", "tracker_sound"):
         if key == "tracker_on" and _as_bool(value) and not cfg.get("tracker_combos"):
             return "Tick at least one droid to track first"
