@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.9.9"
+VERSION = "1.10.0"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -198,7 +198,9 @@ DEFAULTS = {
     # --- Droid Tracker: big alert when a picked variant/rarity spawns at the Sandcrawler ---
     "tracker_on": False,
     "tracker_combos": [],       # "Variant|Rarity" pairs to alert on, e.g. ["Stellar|Legendary"]
-    "tracker_sound": False,     # beep with the alert
+    "tracker_sound": False,     # play a sound with the alert
+    "tracker_tone": "high_bell",  # which sound (see ALERT_SOUNDS)
+    "tracker_volume": 70,       # 10-100 %
     "tracker_seconds": 6,       # how long the alert stays up
     # --- Overlay ---
     "monitor": "auto",          # which screen to watch: "auto" (Fortnite's screen) or 1, 2, ...
@@ -247,7 +249,8 @@ if cfg.get("overlay_y") == 120:      # old default spot -> new spot under the na
 if cfg.get("tracker_variants") and not cfg.get("tracker_combos"):   # v1.9.8 picks -> grid
     cfg["tracker_combos"] = [f"{v}|{r}" for v in cfg["tracker_variants"]
                              for r in (cfg.get("tracker_rarities") or
-                                       ["Common", "Rare", "Epic", "Legendary", "Mythic", "Iconic"])]
+                                       ["Common", "Rare", "Epic", "Legendary", "Mythic"])]
+cfg["tracker_combos"] = [k for k in cfg.get("tracker_combos", []) if not k.endswith("|Iconic")]
 cfg.pop("tracker_variants", None)
 cfg.pop("tracker_rarities", None)
 if cfg.get("mini_y") == 8:
@@ -3084,7 +3087,7 @@ def _run_clicker():
 # the screen for Diamond and better. Read it and put up a big alert for the ones picked.
 
 TRACK_VARIANTS = ["Diamond", "Rainbow", "Beskar", "Galactic", "Stellar", "Kyber", "Scourge"]
-TRACK_RARITIES = ["Common", "Rare", "Epic", "Legendary", "Mythic", "Iconic"]
+TRACK_RARITIES = ["Common", "Rare", "Epic", "Legendary", "Mythic"]   # Iconics never spawn
 _FEED_VARIANTS = ["Basic", "Gold"] + TRACK_VARIANTS
 VARIANT_COLORS = {"Diamond": "#3fa9ff", "Beskar": "#d0d5dc", "Galactic": "#b57bff",
                   "Stellar": "#ffd76a", "Kyber": "#1fbf9a", "Scourge": "#ff4d4d",
@@ -3092,7 +3095,7 @@ VARIANT_COLORS = {"Diamond": "#3fa9ff", "Beskar": "#d0d5dc", "Galactic": "#b57bf
 RAINBOW_COLORS = ["#ff6b9d", "#c779ff", "#5d8bff", "#3fc6ff", "#2fd38a", "#a8e04a", "#ffd23f",
                   "#ff9f40", "#ff6b6b"]
 RARITY_COLORS = {"Common": "#e8e8e8", "Rare": "#4aa3ff", "Epic": "#b57bff",
-                 "Legendary": "#ffa53a", "Mythic": "#ff7ac8", "Iconic": "#ffe14d"}
+                 "Legendary": "#ffa53a", "Mythic": "#ff7ac8"}
 
 _track = {"recent": [], "alerts": [], "last_seen": {}, "sig": None, "sig_found": [],
           "sig_time": 0.0}
@@ -3198,12 +3201,88 @@ def tracker_alert(v, r, test=False):
     _track["alerts"] = ([a for a in _track["alerts"] if a["until"] > time.time()]
                         + [{"v": v, "r": r, "until": time.time() + cfg.get("tracker_seconds", 6),
                             "test": test}])[-3:]
-    if cfg.get("tracker_sound") and sys.platform == "win32":
-        try:
+    if cfg.get("tracker_sound"):
+        play_alert_sound()
+
+
+# --- alert sounds: made on the fly (no sound files to ship) ---
+ALERT_SOUNDS = [("high_bell", "High bell"), ("low_bell", "Low bell"), ("ding_dong", "Ding-dong"),
+                ("rising", "Rising chime"), ("coin", "Coin"), ("sonar", "Sonar ping")]
+_RATE = 44100
+
+
+def _bell(freq, length, decay):
+    """A struck bell: a few slightly out-of-tune overtones that die away."""
+    t = np.arange(int(_RATE * length)) / _RATE
+    out = np.zeros_like(t)
+    for ratio, amp, d in ((1.0, 1.0, 1.0), (2.0, 0.55, 1.6), (2.76, 0.35, 2.2),
+                          (5.4, 0.18, 3.5), (8.93, 0.08, 5.0)):
+        out += amp * np.sin(2 * np.pi * freq * ratio * t) * np.exp(-t * d / decay)
+    attack = np.minimum(1, t / 0.004)              # tiny fade-in: no click
+    return out * attack
+
+
+def _tone(freq, length, decay, shape="sine"):
+    t = np.arange(int(_RATE * length)) / _RATE
+    w = np.sin(2 * np.pi * freq * t)
+    if shape == "square":
+        w = np.sign(w) * 0.5 + 0.5 * np.sin(2 * np.pi * freq * t)
+    return w * np.exp(-t / decay) * np.minimum(1, t / 0.003)
+
+
+def _mix(parts, total):
+    out = np.zeros(int(_RATE * total))
+    for start, wave in parts:
+        i = int(_RATE * start)
+        n = min(len(wave), len(out) - i)
+        out[i:i + n] += wave[:n]
+    return out
+
+
+def make_sound(name):
+    if name == "low_bell":
+        w = _bell(392, 2.2, 0.9)                              # G4
+    elif name == "ding_dong":
+        w = _mix([(0, _bell(1319, 1.2, 0.45)), (0.32, _bell(1047, 1.6, 0.55))], 1.9)
+    elif name == "rising":
+        w = _mix([(0.12 * i, _tone(f, 0.9, 0.25)) for i, f in enumerate((1047, 1319, 1568, 2093))], 1.3)
+    elif name == "coin":
+        w = _mix([(0, _tone(988, 0.09, 0.2, "square")), (0.08, _tone(1319, 0.5, 0.18, "square"))], 0.6)
+    elif name == "sonar":
+        p = _tone(1180, 1.4, 0.45)
+        w = _mix([(0, p), (0.38, p * 0.35), (0.76, p * 0.12)], 2.2)
+    else:                                                     # high_bell
+        w = _bell(1568, 1.6, 0.5)                             # G6
+    return w / (np.abs(w).max() or 1)
+
+
+def sound_file(name, volume):
+    """Write the sound as a .wav once (per volume) and return its path."""
+    import wave
+    folder = os.path.join(BASE_DIR, "sounds")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{name}_{int(volume)}.wav")
+    if not os.path.exists(path):
+        data = (make_sound(name) * 0.9 * (volume / 100) * 32767).astype(np.int16)
+        with wave.open(path, "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(_RATE)
+            f.writeframes(data.tobytes())
+    return path
+
+
+def play_alert_sound(name=None):
+    name = name or cfg.get("tracker_tone", "high_bell")
+    if name not in dict(ALERT_SOUNDS):
+        name = "high_bell"
+    try:
+        path = sound_file(name, max(10, min(100, int(cfg.get("tracker_volume", 70)))))
+        if sys.platform == "win32":
             import winsound
-            winsound.MessageBeep(0x30)
-        except Exception:
-            pass
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+    except Exception as e:
+        print("Alert sound failed:", e)
 
 
 def tracker_watch():
@@ -4339,6 +4418,9 @@ def panel_state():
             "on": cfg.get("tracker_on", False),
             "combos": cfg.get("tracker_combos", []),
             "sound": cfg.get("tracker_sound", False),
+            "tone": cfg.get("tracker_tone", "high_bell"),
+            "volume": cfg.get("tracker_volume", 70),
+            "tones": [{"id": k, "name": n} for k, n in ALERT_SOUNDS],
             "seconds": cfg.get("tracker_seconds", 6),
             "all_variants": TRACK_VARIANTS,
             "all_rarities": TRACK_RARITIES,
@@ -4462,6 +4544,12 @@ def panel_set(key, value):
         cfg[key] = [f"{v}|{r}" for v in TRACK_VARIANTS for r in TRACK_RARITIES if f"{v}|{r}" in want]
         if not cfg[key]:
             cfg["tracker_on"] = False              # nothing left to track
+    elif key == "tracker_tone":
+        if value not in dict(ALERT_SOUNDS):
+            return "bad value"
+        cfg[key] = value
+    elif key == "tracker_volume":
+        cfg[key] = int(_clamp_num(value, 10, 100))
     elif key == "tracker_seconds":
         cfg[key] = int(_clamp_num(value, 3, 20))
     elif key == "interact_key":
@@ -4520,6 +4608,9 @@ def panel_action(name, data):
         cfg["inv_add_key"], cfg["inv_remove_key"] = hk("inv_add"), hk("inv_remove")
         save_config()
         notify("Hotkeys reset to the defaults", 3)
+        return ""
+    if name == "tracker_preview":
+        threading.Thread(target=play_alert_sound, args=(data.get("tone"),), daemon=True).start()
         return ""
     if name == "tracker_test":
         v, r = (cfg.get("tracker_combos") or ["Rainbow|Legendary"])[-1].split("|")
