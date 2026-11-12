@@ -29,7 +29,7 @@ button,select,input{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
-#app{display:grid;grid-template-columns:232px minmax(0,1fr);height:100vh}
+#app{display:grid;grid-template-columns:232px minmax(0,1fr);height:calc(100vh / var(--zoom,1))}
 
 /* ---------- sidebar ---------- */
 .sb{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
@@ -49,7 +49,8 @@ button{cursor:pointer}
 .sb-i .ct{margin-left:auto;font-family:var(--mono);font-size:.68rem;font-weight:500;color:var(--muted);letter-spacing:0}
 .sb-i .dot{margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px var(--good-soft);display:none}
 .sb-i.running .dot{display:block}
-.sb-foot{border-top:1px solid var(--line);padding:12px 12px 14px;display:flex;flex-direction:column;gap:14px}
+.sb-foot{border-top:1px solid var(--line);padding:16px 12px 14px;display:flex;flex-direction:column;gap:20px;min-height:330px}
+.sb-foot .sb-nav2{display:flex;flex-direction:column;gap:4px;margin-top:auto}
 .sb-foot .sb-i{padding:6px 8px}
 .sb-f{display:flex;flex-direction:column;gap:6px}
 .sb-f label,.sb-f .lbl{font-family:var(--display);font-size:.6rem;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
@@ -147,6 +148,7 @@ button{cursor:pointer}
 .sys .btn{border:1px solid var(--line);border-radius:7px;padding:5px 11px;font-size:.8rem;font-family:var(--display);font-weight:700;background:var(--panel-2);white-space:nowrap}
 .sys .btn:hover{border-color:var(--line-2)}
 .sys .btn.danger{background:var(--bad-soft);color:var(--bad);border-color:#6a2f2a}
+.sys select.sel{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-size:.88rem;color:var(--text);max-width:100%;min-width:14rem;align-self:flex-start}
 .sys .stabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 16px}
 .sys .stabs button{border:0;background:none;padding:9px 18px 10px;font:inherit;font-family:var(--display);font-weight:700;font-size:.9rem;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-1px;cursor:pointer}
 .sys .stabs button:hover{color:var(--text)}
@@ -491,7 +493,6 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
       <div class="sb-h">Data</div>
       <button class="sb-i" data-page="inv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Inventory<span class="ct" id="ct-inv"></span></button>
       <button class="sb-i" data-page="reb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>Rebirth<span class="ct" id="ct-reb"></span></button>
-      <button class="sb-i" data-page="base"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V10l7-5 7 5v11"/><path d="M9 21v-6h6v6"/></svg>Base Profit</button>
       <button class="sb-i" data-page="fus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/></svg>Fusion<span class="ct" id="ct-fus"></span></button>
       <button class="sb-i" data-page="chips"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>Chips</button>
       <button class="sb-i" data-page="sdex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg>Scourgedex<span class="ct" id="ct-sdex"></span></button>
@@ -504,11 +505,12 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
       <button class="sb-i" data-page="scanner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>Droid Scanner</button>
     </nav>
     <div class="sb-foot">
-      <button class="sb-i" data-page="hotkeys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>Hotkeys</button>
       <div class="sb-f"><label for="sb-player">Player</label><select id="sb-player"></select><div class="sb-mods" id="sb-mods"></div></div>
-      <div class="sb-f"><label for="sb-screen">Screen</label><select id="sb-screen"></select></div>
       <label class="sb-sw switch"><span>Hide in-game overlay</span><input type="checkbox" id="sb-hide"></label>
+      <div class="sb-nav2">
+      <button class="sb-i" data-page="hotkeys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>Hotkeys</button>
       <button class="sb-i" data-page="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
+      </div>
       <div class="sb-ver"><span id="sb-ver">v–</span><span id="sb-acct"></span></div>
     </div>
   </aside>
@@ -698,7 +700,23 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
         <section class="page" id="p-settings">
           <div class="stabs" role="tablist" aria-label="Settings">
             <button type="button" role="tab" id="st-main-t" aria-controls="st-main" aria-selected="true">Main</button>
+            <button type="button" role="tab" id="st-player-t" aria-controls="st-player" aria-selected="false">Player</button>
             <button type="button" role="tab" id="st-keys-t" aria-controls="st-keys" aria-selected="false">Hotkeys</button>
+          </div>
+          <div class="grid" id="st-player" role="tabpanel" aria-labelledby="st-player-t" hidden>
+            <div class="card" style="grid-column:1/-1">
+              <h3>Account</h3>
+              <p class="note" id="s-acct">–</p>
+              <div class="row">
+                <button class="btn" id="s-folder" type="button">Open settings folder</button>
+                <button class="btn danger" id="s-signout" type="button">Sign out</button>
+                <button class="btn danger" id="s-quit" type="button">Quit Droid Tycoon Helper</button>
+              </div>
+            </div>
+            <div class="card" style="grid-column:1/-1">
+              <h3>Player settings <span class="sub" id="ps-name"></span></h3>
+              <div class="wsite" id="ps-box"><p class="note">Loading…</p></div>
+            </div>
           </div>
           <div class="grid" id="st-keys" role="tabpanel" aria-labelledby="st-keys-t" hidden>
             <div class="card" style="grid-column:1/-1">
@@ -736,25 +754,29 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
               <label class="switch"><input type="checkbox" id="s-openwin"><span>Open this window when Droid Tycoon Helper starts<small>Otherwise open it from the tray icon.</small></span></label>
               <label class="switch"><input type="checkbox" id="s-auto"><span>Update automatically when the app starts</span></label>
               <div class="row"><button class="btn" id="s-check" type="button">Check for updates now</button><span class="note" id="s-tray"></span></div>
+              <div class="field">
+                <label for="s-scale">App size <span class="note" style="display:inline">&middot; how big everything in this window is</span></label>
+                <select id="s-scale" class="sel"></select>
+              </div>
+              <div class="field">
+                <span class="lbl">Window size &amp; position</span>
+                <div class="row"><button class="btn" id="s-place" type="button">Save where this window is</button><button class="btn" id="s-place-forget" type="button">Forget</button></div>
+                <p class="note" id="s-place-v"></p>
+              </div>
             </div>
-            <div class="card" style="grid-column:1/-1">
-              <h3>Player settings <span class="sub" id="ps-name"></span></h3>
-              <div class="wsite" id="ps-box"><p class="note">Loading…</p></div>
+            <div class="card">
+              <h3>Screen</h3>
+              <div class="field">
+                <label for="s-screen">Which screen to watch</label>
+                <select id="s-screen" class="sel"></select>
+              </div>
+              <p class="note">Auto follows the monitor Fortnite is on. Pick one if you play on a second screen and the overlay or scans end up on the wrong one.</p>
             </div>
             <div class="card">
               <h3>Droid pictures</h3>
               <p class="note" id="s-pics">–</p>
               <p class="note">Pictures come from the Droid Tycoon wiki and are saved in the <b>droid_pictures</b> folder next to the app. Ones the wiki doesn't have show the droid's initials instead.</p>
               <div class="row"><button class="btn" id="s-pics-reload" type="button">Look again</button></div>
-            </div>
-            <div class="card">
-              <h3>Account</h3>
-              <p class="note" id="s-acct">–</p>
-              <div class="row">
-                <button class="btn" id="s-folder" type="button">Open settings folder</button>
-                <button class="btn danger" id="s-signout" type="button">Sign out</button>
-                <button class="btn danger" id="s-quit" type="button">Quit Droid Tycoon Helper</button>
-              </div>
             </div>
           </div>
         </section>
@@ -1682,7 +1704,6 @@ const MODE_NAMES={fishing:"Fishing",traits:"Traits",clicker:"Auto Clicker"};
 const PAGES={
   inv:["Inventory","Your droids, by tier. Tap a tier to mark it owned.","data"],
   reb:["Rebirth Tracker","Your path, the droids each rebirth needs and its rewards.","data"],
-  base:["Base Profit","The best droid for every slot, from what you own.","data"],
   fus:["Fusion","Recipes, what you can make now and what you've made.","data"],
   chips:["Chip Upgrades","Chips for your next rebirth, and an upgrade calculator.","data"],
   sdex:["Scourgedex","Hand in one Scourge of every droid.","data"],
@@ -1693,7 +1714,7 @@ const PAGES={
   clicker:["Auto Clicker","Scrap Hit clicking or Potion Grab.","sys"],
   scanner:["Droid Scanner","Add droids to your inventory straight from the game.","sys"],
   settings:["Settings","Overlay, updates, pictures and account.","sys"]};
-const DATA_TAB={inv:"inv",reb:"reb",base:"base",fus:"fus",chips:"chips",sdex:"inv"};
+const DATA_TAB={inv:"inv",reb:"reb",fus:"fus",chips:"chips",sdex:"inv"};
 let S=null, page=null, pickedMode="fishing", misses=0, lastDataVer=null, sentPlayer=null, lastSig=null;
 const touched={};
 const store={get(k,d){try{const v=localStorage.getItem("swkh-"+k);return v===null?d:JSON.parse(v)}catch(e){return d}},
@@ -1747,10 +1768,10 @@ window.APP={
 };
 
 /* ---------- navigation ---------- */
+const STABS=["main","player","keys"];
 function settingsTab(which){
-  const keys=which==="keys";
-  $("st-keys").hidden=!keys; $("st-main").hidden=keys;
-  $("st-keys-t").setAttribute("aria-selected",String(keys)); $("st-main-t").setAttribute("aria-selected",String(!keys));
+  if(!STABS.includes(which))which="main";
+  STABS.forEach(t=>{$("st-"+t).hidden=t!==which;$("st-"+t+"-t").setAttribute("aria-selected",String(t===which))});
   store.set("stab",which);
 }
 function show(pg){
@@ -1775,8 +1796,40 @@ function show(pg){
   renderHeader();
 }
 $("st-main-t").addEventListener("click",()=>settingsTab("main"));
+/* app size (zoom): "auto" picks from the monitor, or a fixed size */
+const SCALES=[80,90,100,110,125,150];
+let appScale=100, scalePick="auto";
+function autoScale(){
+  const h=screen.height||1080;          // screen height after Windows' own scaling
+  return h<850?90:h<1200?100:h<1500?115:h<1900?130:150;
+}
+function applyScale(pick){
+  scalePick=pick==="auto"||pick==null?"auto":Math.max(70,Math.min(150,+pick||100));
+  const v=scalePick==="auto"?autoScale():scalePick;
+  if(v!==appScale){appScale=v;const r=document.documentElement;r.style.zoom=v/100;r.style.setProperty("--zoom",v/100)}
+  const sel=$("s-scale"), opts=`<option value="auto">Auto - fits this monitor (${autoScale()}%)</option>`+SCALES.map(n=>`<option value="${n}">${n}%${n===100?" (normal)":""}</option>`).join("");
+  if(sel.dataset.k!==opts){sel.innerHTML=opts;sel.dataset.k=opts}
+  if(!busy("s-scale"))sel.value=String(scalePick);
+}
+function setScale(pick){touched["s-scale"]=Date.now();applyScale(pick);$("s-scale").value=String(scalePick);setting("ui_scale",scalePick,"s-scale")}
+$("s-scale").addEventListener("change",e=>setScale(e.target.value==="auto"?"auto":+e.target.value));
+// No zoom shortcuts: Ctrl + / Ctrl - / Ctrl 0 and Ctrl + scroll are blocked so a stray key
+// press never changes the size (the window's built-in browser zoom included).
+// The App size dropdown in Settings is the only way to change it.
+document.addEventListener("keydown",e=>{
+  if(!(e.ctrlKey||e.metaKey)||e.altKey)return;
+  if(["=","+","-","_","0"].includes(e.key)||["NumpadAdd","NumpadSubtract","Numpad0"].includes(e.code))e.preventDefault();
+},true);
+document.addEventListener("wheel",e=>{if(e.ctrlKey)e.preventDefault()},{passive:false,capture:true});
+window.addEventListener("resize",()=>{if(scalePick==="auto")applyScale("auto")});   // moved to another monitor
+/* window placement */
+$("s-place").addEventListener("click",()=>action("save_window_place").then(ok=>ok&&toast("Saved - the window will open here next time",true)));
+$("s-place-forget").addEventListener("click",()=>action("forget_window_place").then(ok=>ok&&toast("Forgotten - the window opens in the default spot",true)));
 $("st-keys-t").addEventListener("click",()=>settingsTab("keys"));
-document.querySelector(".stabs").addEventListener("keydown",e=>{if(e.key==="ArrowRight"||e.key==="ArrowLeft"){const k=$("st-keys").hidden;settingsTab(k?"keys":"main");$(k?"st-keys-t":"st-main-t").focus()}});
+$("st-player-t").addEventListener("click",()=>settingsTab("player"));
+document.querySelector(".stabs").addEventListener("keydown",e=>{if(e.key!=="ArrowRight"&&e.key!=="ArrowLeft")return;
+  const cur=STABS.findIndex(t=>!$("st-"+t).hidden), nxt=STABS[(cur+(e.key==="ArrowRight"?1:STABS.length-1))%STABS.length];
+  settingsTab(nxt);$("st-"+nxt+"-t").focus()});
 $("nav").addEventListener("click",e=>{const b=e.target.closest(".sb-i[data-page]");if(b)show(b.dataset.page)});
 document.querySelector(".sb-foot").addEventListener("click",e=>{const b=e.target.closest(".sb-i[data-page]");if(b)show(b.dataset.page)});
 
@@ -1791,7 +1844,7 @@ function renderSide(){
   if(p&&box&&!box.contains(document.activeElement)) renderPS(p);
   else if(!p&&box) box.innerHTML=`<p class="note">${mode==="loading"?"Loading…":"No player yet."}</p>`;
 }
-$("sb-mods").addEventListener("click",e=>{if(e.target.id==="sb-mods-set")show("settings")});
+$("sb-mods").addEventListener("click",e=>{if(e.target.id==="sb-mods-set"){show("settings");settingsTab("player")}});
 function refreshData(){
   renderPlayers(); renderCounts(); renderSide();
   if(page&&PAGES[page][2]==="data"){
@@ -1850,13 +1903,13 @@ $("go").addEventListener("click",async()=>{
 
 /* ---------- sidebar footer ---------- */
 let monKeys="";
-$("sb-screen").addEventListener("change",e=>setting("monitor",e.target.value,"sb-screen"));
+$("s-screen").addEventListener("change",e=>setting("monitor",e.target.value,"s-screen"));
 $("sb-hide").addEventListener("change",async e=>{touched["sb-hide"]=Date.now();const h=e.target.checked;await setting("overlay",!h);await setting("discreet",h)});
 function renderFoot(){
   const s=S.settings,keys=JSON.stringify(s.monitors);
   if(keys!==monKeys){monKeys=keys;
-    $("sb-screen").innerHTML=`<option value="auto">Auto (Fortnite's screen)</option>`+s.monitors.map(m=>`<option value="${esc2(m.id)}">${esc2(m.label)}</option>`).join("")}
-  val("sb-screen",s.monitor); chk("sb-hide",!s.overlay&&s.discreet);
+    $("s-screen").innerHTML=`<option value="auto">Auto (Fortnite's screen)</option>`+s.monitors.map(m=>`<option value="${esc2(m.id)}">${esc2(m.label)}</option>`).join("")}
+  val("s-screen",s.monitor); chk("sb-hide",!s.overlay&&s.discreet);
 }
 
 /* ---------- fishing ---------- */
@@ -2079,6 +2132,10 @@ function renderTimers(){
 }
 function renderSettings(){
   renderTimers();
+  if(!busy("s-scale"))applyScale(S.settings.ui_scale);
+  const wp=S.settings.window_place;
+  txt("s-place-v",wp?`Opens at ${wp.w} \u00d7 ${wp.h}${wp.max?" (maximized)":""}, ${wp.x}, ${wp.y} on screen.`:"Not saved - the window opens in the default spot.");
+  $("s-place-forget").disabled=!wp;
   val("s-ikey",S.settings.interact_key||"F");
   document.querySelectorAll(".ikey").forEach(e=>{if(e.textContent!==(S.settings.interact_key||"F"))e.textContent=S.settings.interact_key||"F"});
   const s=S.settings;
@@ -2100,7 +2157,7 @@ let first=true;
 async function poll(){
   try{S=await api("/api/state");misses=0;$("offline").style.display="none"}
   catch(e){if(++misses>=4)$("offline").style.display="grid";return}
-  if(first){first=false;settingsTab(store.get("stab","main")==="keys"?"keys":"main");show(store.get("page",S.running?S.mode:"inv"));init()}
+  if(first){first=false;settingsTab(store.get("stab","main"));show(store.get("page",S.running?S.mode:"inv"));init()}
   if(lastDataVer!==null&&S.data_version!==lastDataVer){APP.picVer=S.data_version;if(!dirty.size)APP.loadPlayers()}
   lastDataVer=S.data_version;
   renderHeader();renderFoot();renderFishing();renderTraits();renderClicker();renderScanner();renderTracker();renderHotkeys();renderSettings();

@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.10.7"
+VERSION = "1.10.10"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -189,6 +189,8 @@ DEFAULTS = {
     # --- App window (website on top, controls below) ---
     "website_url": "",          # your LMS Droid Tycoon website address
     "open_window_on_start": True,
+    "ui_scale": "auto",         # app window size: "auto" (from the monitor) or a % (70-150)
+    "window_place": None,       # saved app window spot: {"x","y","w","h","max"} in screen pixels
     "panel_height": 360,
     "show_rebirth": True,
     "hide_outside_game": True,  # hide the overlay while another window is in front
@@ -4619,6 +4621,8 @@ def panel_state():
             "mini_badge": cfg["mini_badge"], "discreet": cfg["discreet"],
             "auto_update": cfg["auto_update"], "website_url": cfg["website_url"],
             "open_window_on_start": cfg["open_window_on_start"],
+            "ui_scale": cfg.get("ui_scale", "auto"),
+            "window_place": cfg.get("window_place"),
             "show_rebirth": cfg.get("show_rebirth", True),
             "hide_outside_game": cfg.get("hide_outside_game", True),
             "timers_on": cfg.get("timers_on", True), "timers_within": cfg.get("timers_within", 5),
@@ -4737,6 +4741,8 @@ def panel_set(key, value):
         cfg[key] = int(_clamp_num(value, 10, 100))
     elif key == "tracker_seconds":
         cfg[key] = int(_clamp_num(value, 3, 20))
+    elif key == "ui_scale":
+        cfg[key] = "auto" if value == "auto" else int(round(_clamp_num(value, 70, 150) / 5) * 5)
     elif key == "interact_key":
         k = str(value).strip().lower()
         if not re.fullmatch(r"[a-z0-9]", k):
@@ -4793,6 +4799,17 @@ def panel_action(name, data):
         cfg["inv_add_key"], cfg["inv_remove_key"] = hk("inv_add"), hk("inv_remove")
         save_config()
         notify("Hotkeys reset to the defaults", 3)
+        return ""
+    if name == "save_window_place":
+        place = app_window_rect()
+        if not place:
+            return "Couldn't find the app window"
+        cfg["window_place"] = place
+        save_config()
+        return ""
+    if name == "forget_window_place":
+        cfg["window_place"] = None
+        save_config()
         return ""
     if name == "open_pings":
         folder = os.path.join(BASE_DIR, "pings")
@@ -5495,13 +5512,63 @@ def open_app_window():
         _open_in_browser(panel_url())
 
 
+def app_window_rect():
+    """Where the app window is now: {"x","y","w","h","max"} in screen pixels, or None."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    hwnd = u.FindWindowW(None, APP_WINDOW_TITLE)
+    if not hwnd:
+        return None
+
+    class WINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [("length", wintypes.UINT), ("flags", wintypes.UINT), ("showCmd", wintypes.UINT),
+                    ("ptMin", wintypes.POINT), ("ptMax", wintypes.POINT), ("rc", wintypes.RECT)]
+    wp = WINDOWPLACEMENT()
+    wp.length = ctypes.sizeof(wp)
+    u.GetWindowPlacement(hwnd, ctypes.byref(wp))
+    maximized = bool(u.IsZoomed(hwnd))
+    r = wintypes.RECT()
+    if maximized or u.IsIconic(hwnd):
+        r = wp.rc                                  # the normal (restored) size and spot
+    else:
+        u.GetWindowRect(hwnd, ctypes.byref(r))
+    return {"x": r.left, "y": r.top, "w": r.right - r.left, "h": r.bottom - r.top, "max": maximized}
+
+
+def place_app_window(hwnd, place):
+    """Move the app window to its saved spot (if that spot is still on a monitor)."""
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    try:
+        x, y, w, h = int(place["x"]), int(place["y"]), int(place["w"]), int(place["h"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if w < 400 or h < 300:
+        return False
+    rc = wintypes.RECT(x + 40, y + 10, x + w - 40, y + 60)   # the title bar must be on screen
+    if not u.MonitorFromRect(ctypes.byref(rc), 0):          # 0 = MONITOR_DEFAULTTONULL
+        return False                                        # that monitor is gone
+    u.ShowWindow(hwnd, 1)                                   # restore first
+    u.SetWindowPos(hwnd, 0, x, y, w, h, 0x0004 | 0x0010)    # SWP_NOZORDER | SWP_NOACTIVATE
+    if place.get("max"):
+        u.ShowWindow(hwnd, 3)                               # SW_MAXIMIZE
+    return True
+
+
 def _open_in_browser(url):
     edge = [os.path.join(os.environ.get(k, ""), "Microsoft", "Edge", "Application", "msedge.exe")
             for k in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
     for path in edge:
         if os.path.exists(path):
             try:
-                subprocess.Popen([path, f"--app={url}", "--window-size=1400,950",
+                pl = cfg.get("window_place") or {}
+                where = ([f"--window-size={pl['w']},{pl['h']}", f"--window-position={pl['x']},{pl['y']}"]
+                         if pl.get("w") else ["--window-size=1400,950"])
+                subprocess.Popen([path, f"--app={url}", *where,
                                   "--user-data-dir=" + os.path.join(BASE_DIR, "app_data")])
                 return
             except OSError:
@@ -5521,9 +5588,25 @@ def run_window_process(url):
         _open_in_browser(url)
         return
 
+    place = cfg.get("window_place")
+
     def watchdog(win):
-        """Close the window when the main app quits."""
+        """Put the window in its saved spot, then close it when the main app quits."""
         import urllib.request
+        if place and sys.platform == "win32":
+            import ctypes
+            hwnd = 0
+            for _ in range(50):                     # the window exists a moment after start
+                hwnd = ctypes.windll.user32.FindWindowW(None, APP_WINDOW_TITLE)
+                if hwnd:
+                    break
+                time.sleep(0.05)
+            try:
+                if hwnd:
+                    place_app_window(hwnd, place)
+            except Exception as e:
+                print("Couldn't place the window:", e)
+            win.show()
         misses = 0
         while True:
             time.sleep(2)
@@ -5538,7 +5621,8 @@ def run_window_process(url):
 
     try:
         win = webview.create_window(APP_WINDOW_TITLE, url, width=1400, height=950,
-                                    min_size=(820, 560), background_color="#0e1014")
+                                    min_size=(820, 560), background_color="#0e1014",
+                                    hidden=bool(place and sys.platform == "win32"))
         webview.start(func=watchdog, args=(win,), private_mode=False, storage_path=data_dir)
     except Exception as e:
         print("App window failed:", e)
