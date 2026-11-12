@@ -147,6 +147,11 @@ button{cursor:pointer}
 .sys .btn{border:1px solid var(--line);border-radius:7px;padding:5px 11px;font-size:.8rem;font-family:var(--display);font-weight:700;background:var(--panel-2);white-space:nowrap}
 .sys .btn:hover{border-color:var(--line-2)}
 .sys .btn.danger{background:var(--bad-soft);color:var(--bad);border-color:#6a2f2a}
+.sys .stabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 16px}
+.sys .stabs button{border:0;background:none;padding:9px 18px 10px;font:inherit;font-family:var(--display);font-weight:700;font-size:.9rem;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-1px;cursor:pointer}
+.sys .stabs button:hover{color:var(--text)}
+.sys .stabs button[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
+.sys .stabs button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:6px 6px 0 0}
 .sys .seg{display:inline-flex;align-self:flex-start;max-width:100%;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--panel-2)}
 .sys .seg button{border:0;background:none;padding:5px 12px;font-size:.82rem;color:var(--muted);white-space:nowrap}
 .sys .seg button+button{border-left:1px solid var(--line)}
@@ -691,7 +696,16 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
         <!-- HOTKEYS -->
         <!-- SETTINGS -->
         <section class="page" id="p-settings">
-          <div class="grid even">
+          <div class="stabs" role="tablist" aria-label="Settings">
+            <button type="button" role="tab" id="st-main-t" aria-controls="st-main" aria-selected="true">Main</button>
+            <button type="button" role="tab" id="st-keys-t" aria-controls="st-keys" aria-selected="false">Hotkeys</button>
+          </div>
+          <div class="grid" id="st-keys" role="tabpanel" aria-labelledby="st-keys-t" hidden>
+            <div class="card" style="grid-column:1/-1">
+              <h3>Fortnite keys</h3>
+              <div class="row"><label for="s-ikey" class="note">Interact key</label><input type="text" id="s-ikey" maxlength="1" spellcheck="false" autocomplete="off" style="width:3.2rem;text-align:center;text-transform:uppercase;font-weight:600"></div>
+              <p class="note">The key you use to interact in Fortnite (F by default). Traits and Potion Grab press this key, and fishing also watches for it in the key prompts. Match it to your Fortnite keybind.</p>
+            </div>
             <div class="card" id="s-hotkeys" style="grid-column:1/-1">
               <h3>Hotkeys <span class="sub">work while you're in the game</span></h3>
               <p class="note">Click <b>Change</b>, then press the new key (Esc cancels). If another action already uses that key, the two swap. Small keyboard with no Insert, Page Up or arrow keys? Set these to keys you have.</p>
@@ -699,7 +713,9 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
               <div class="row"><button class="btn" id="hk-reset" type="button">Reset to defaults</button></div>
               <p class="note">Keys the game needs can't be used: the fishing letters, your Interact key (<span class="ikey">F</span>), W A S D, Space, Enter and Esc. The arrow keys can only be used for the menu keys. Hotkeys are switched off while this window is in front, so typing here never triggers them.</p>
             </div>
-            <div class="card">
+          </div>
+          <div class="grid even" id="st-main" role="tabpanel" aria-labelledby="st-main-t">
+                        <div class="card">
               <h3>In-game overlay</h3>
               <label class="switch"><input type="checkbox" id="s-overlay"><span>Show the overlay box</span></label>
               <label class="switch"><input type="checkbox" id="s-outside"><span>Only while Fortnite is in front<small>Hides the overlay when you switch to this window, a browser or anything else.</small></span></label>
@@ -715,12 +731,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
               <div class="tmr" id="s-tlist"></div>
               <p class="note" id="s-clock"></p>
             </div>
-            <div class="card">
-              <h3>Fortnite keys</h3>
-              <div class="row"><label for="s-ikey" class="note">Interact key</label><input type="text" id="s-ikey" maxlength="1" spellcheck="false" autocomplete="off" style="width:3.2rem;text-align:center;text-transform:uppercase;font-weight:600"></div>
-              <p class="note">The key you use to interact in Fortnite (F by default). Traits and Potion Grab press this key, and fishing also watches for it in the key prompts. Match it to your Fortnite keybind.</p>
-            </div>
-            <div class="card">
+                        <div class="card">
               <h3>App</h3>
               <label class="switch"><input type="checkbox" id="s-openwin"><span>Open this window when Droid Tycoon Helper starts<small>Otherwise open it from the tray icon.</small></span></label>
               <label class="switch"><input type="checkbox" id="s-auto"><span>Update automatically when the app starts</span></label>
@@ -870,11 +881,15 @@ function srb(L){const pay=SRB_PAY[L];if(!pay)return null;let bonus=0;for(let l=1
 function stepNC(L){return REW[L-1].nc}
 // ---------- credit / XP modifiers ----------
 // You enter what the game shows; the tracker then adjusts it as you rebirth.
-// Rebirth: credit multiplier moves to that level's value (wiki table); XP adds that level's XP bonus.
+// Rebirth: credit and XP multipliers move to that level's totals (wiki table).
 // Super Rebirth: the rebirth part is removed and the Super Rebirth payout's permanent boosts are added.
 const pnum=v=>{const m=String(v||"").match(/[\d.]+/);return m?parseFloat(m[0]):0};
-const rebCredit=L=>L>0?pnum(REW[L-1].cm):0;
-const rebXP=L=>{let t=0;for(let l=1;l<=L;l++)t+=pnum(REW[l-1].xm);return t};
+// The wiki's credit and XP multipliers are the TOTAL you have at that rebirth (e.g. R31:
+// +220% credits, +200% XP), not amounts to add up - a blank means "same as before".
+// Each rebirth therefore changes your modifier by the difference to the previous level.
+const rebTotal=(L,f)=>{for(let l=Math.min(L,REW.length);l>=1;l--){const v=REW[l-1][f];if(v)return pnum(v)}return 0};
+const rebCredit=L=>rebTotal(L,"cm");
+const rebXP=L=>rebTotal(L,"xm");
 const topOf=p=>{const d=doneSet(p);return d.size?Math.max(...d):0};
 function syncMods(p){
   if(!p||!p.mods) return;
@@ -1732,8 +1747,14 @@ window.APP={
 };
 
 /* ---------- navigation ---------- */
+function settingsTab(which){
+  const keys=which==="keys";
+  $("st-keys").hidden=!keys; $("st-main").hidden=keys;
+  $("st-keys-t").setAttribute("aria-selected",String(keys)); $("st-main-t").setAttribute("aria-selected",String(!keys));
+  store.set("stab",which);
+}
 function show(pg){
-  if(pg==="hotkeys"){show("settings");$("s-hotkeys").scrollIntoView({block:"start"});
+  if(pg==="hotkeys"){show("settings");settingsTab("keys");
     document.querySelectorAll(".sb-i[data-page]").forEach(b=>b.setAttribute("aria-current",b.dataset.page==="hotkeys"?"page":"false"));return}
   if(!PAGES[pg]) pg="inv";
   page=pg; store.set("page",pg);
@@ -1753,6 +1774,9 @@ function show(pg){
   $("scroll").scrollTop=0;
   renderHeader();
 }
+$("st-main-t").addEventListener("click",()=>settingsTab("main"));
+$("st-keys-t").addEventListener("click",()=>settingsTab("keys"));
+document.querySelector(".stabs").addEventListener("keydown",e=>{if(e.key==="ArrowRight"||e.key==="ArrowLeft"){const k=$("st-keys").hidden;settingsTab(k?"keys":"main");$(k?"st-keys-t":"st-main-t").focus()}});
 $("nav").addEventListener("click",e=>{const b=e.target.closest(".sb-i[data-page]");if(b)show(b.dataset.page)});
 document.querySelector(".sb-foot").addEventListener("click",e=>{const b=e.target.closest(".sb-i[data-page]");if(b)show(b.dataset.page)});
 
@@ -2076,7 +2100,7 @@ let first=true;
 async function poll(){
   try{S=await api("/api/state");misses=0;$("offline").style.display="none"}
   catch(e){if(++misses>=4)$("offline").style.display="grid";return}
-  if(first){first=false;show(store.get("page",S.running?S.mode:"inv"));init()}
+  if(first){first=false;settingsTab(store.get("stab","main")==="keys"?"keys":"main");show(store.get("page",S.running?S.mode:"inv"));init()}
   if(lastDataVer!==null&&S.data_version!==lastDataVer){APP.picVer=S.data_version;if(!dirty.size)APP.loadPlayers()}
   lastDataVer=S.data_version;
   renderHeader();renderFoot();renderFishing();renderTraits();renderClicker();renderScanner();renderTracker();renderHotkeys();renderSettings();

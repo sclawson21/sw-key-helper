@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.10.6"
+VERSION = "1.10.7"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -4899,7 +4899,7 @@ def data_delete_player(pid):
 # ---- droid pictures: looked up on the Droid Tycoon wiki, saved next to the app ----
 WIKI_API = "https://star-wars-droid-tycoon.fandom.com/api.php"
 PIC_DIR = "droid_pictures"
-PIC_MATCH_VERSION = 2          # raise when the matching changes, so saved lists are redone
+PIC_MATCH_VERSION = 3          # raise when the matching changes, so saved lists are redone
 _pics = {"index": None, "status": "", "loading": False}
 _VARIANT_WORDS = {"default": "0", "base": "0", "basic": "0", "normal": "0", "regular": "0",
                   "gold": "1", "golden": "1", "diamond": "2", "rainbow": "3", "beskar": "4",
@@ -4963,14 +4963,20 @@ def match_picture(title, names):
     return (PIC_ALIASES.get(best[1], best[1]), best[2]) if best else None
 
 
-def _wiki_get(params):
-    import urllib.request
+def _wiki_get(params, tries=3):
+    """One wiki API call. Retries (the wiki sometimes rate-limits or times out) and uses
+    web_get, which falls back to Windows when Python can't check the certificate."""
     import urllib.parse
     url = WIKI_API + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={
-        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) SW-Key-Helper/{VERSION}"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.load(r)
+    for attempt in range(tries):
+        try:
+            data = web_get(url, headers={
+                "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) SW-Key-Helper/{VERSION}"})
+            return json.loads(data)
+        except Exception:
+            if attempt == tries - 1:
+                raise
+            time.sleep(2 + 3 * attempt)
 
 
 DROIDEX_PAGE = "Droidex"
@@ -5177,6 +5183,7 @@ def build_picture_index(force=False):
         return
     _pics["loading"] = True
     _pics["status"] = "Looking up droid pictures on the wiki…"
+    problems = []
     try:
         files, cont = [], {}
         try:
@@ -5189,6 +5196,7 @@ def build_picture_index(force=False):
                     break
         except Exception as e:
             print("Couldn't list the wiki's pictures:", e)
+            problems.append(f"file list stopped after {len(files)} files ({str(e)[:60]})")
         names = list(DROID_RARITY) + list(PIC_ALIASES)
         found = {}
         try:
@@ -5202,6 +5210,7 @@ def build_picture_index(force=False):
             print("Droidex page pictures:", len(found))
         except Exception as e:
             print("Couldn't read the Droidex page:", e)
+            problems.append(f"Droidex page unreadable ({str(e)[:60]})")
         for f in files:
             m = match_picture(f.get("name", ""), names)
             if not m or not f.get("url"):
@@ -5213,6 +5222,36 @@ def build_picture_index(force=False):
             if prev is None or len(f["name"]) < len(prev[0]):
                 found[key] = (f["name"], f["url"])
         mapping = {k: v[1] for k, v in found.items()}
+        # Droids still without a picture: search the wiki's files for each by name
+        # (catches pictures whose file names the matcher above didn't recognise).
+        have = {k.split("|")[0] for k in mapping}
+        for name in sorted(set(DROID_RARITY) - have):
+            try:
+                r = _wiki_get({"action": "query", "generator": "search", "gsrnamespace": "6",
+                               "gsrsearch": name, "gsrlimit": "20", "prop": "imageinfo",
+                               "iiprop": "url", "format": "json"}, tries=2)
+                for pg in (r.get("query", {}).get("pages") or {}).values():
+                    title = pg.get("title", "").split(":", 1)[-1]
+                    info = (pg.get("imageinfo") or [{}])[0]
+                    m = match_picture(title, names)
+                    if m and info.get("url") and m[0] == name:
+                        mapping.setdefault(f"{m[0]}|{m[1]}", info["url"])
+            except Exception as e:
+                problems.append(f"search for {name} failed")
+                print("Wiki search failed for", name, e)
+                if len(problems) > 6:
+                    break
+        # Keep last week's pictures for anything this lookup didn't find, so a bad day
+        # on the wiki never loses pictures that were working.
+        old = {}
+        try:
+            with open(path) as fh:
+                old = json.load(fh).get("map") or {}
+        except Exception:
+            pass
+        if not force or problems:
+            for k, u in old.items():
+                mapping.setdefault(k, u)
         for f in os.listdir(PIC_DIR) if os.path.isdir(PIC_DIR) else []:
             if f.endswith(".png") and force:
                 try:
@@ -5229,6 +5268,8 @@ def build_picture_index(force=False):
         _pics["status"] = (f"{len(mapping)} pictures for {len(have)} of {len(DROID_RARITY)} droids from the wiki"
                            + (f". No picture yet: {', '.join(missing)}" if missing else "")
                            if mapping else "Couldn't match any wiki pictures to droids")
+        if problems:
+            _pics["status"] += ". Wiki trouble: " + "; ".join(problems[:3])
         print("Droid pictures:", _pics["status"])
     except Exception as e:
         print("Couldn't load droid pictures:", e)
