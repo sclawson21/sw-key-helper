@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.10.3"
+VERSION = "1.10.6"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -184,7 +184,8 @@ DEFAULTS = {
     # --- Hotkeys (change them in the app window: Hotkeys tab) ---
     "hotkeys": {"menu": "insert", "reb_up": "page_up", "reb_down": "page_down",
                 "inv_add": "f9", "inv_remove": "f10", "area": "home",
-                "snapshot": "delete", "quit": "end"},
+                "snapshot": "delete", "quit": "end",
+                "nav_up": "up", "nav_down": "down", "nav_left": "left", "nav_right": "right"},
     # --- App window (website on top, controls below) ---
     "website_url": "",          # your LMS Droid Tycoon website address
     "open_window_on_start": True,
@@ -243,6 +244,7 @@ def save_config():
 
 
 cfg = load_config()
+cfg["hotkeys"] = {**DEFAULTS["hotkeys"], **(cfg.get("hotkeys") or {})}   # new actions get defaults
 if cfg["allowed_keys"] == "EFZQ":  # older config files - the game added C
     cfg["allowed_keys"] = "EFZQC"
 if cfg.get("overlay_y") == 120:      # old default spot -> new spot under the name/ID line
@@ -443,7 +445,12 @@ HOTKEY_ACTIONS = [            # (id, what it does) - keys live in cfg["hotkeys"]
     ("area", "Draw the fishing scan area"),
     ("snapshot", "Save debug pictures"),
     ("quit", "Quit Droid Tycoon Helper"),
+    ("nav_up", "Menu up (also: previous variant when adding a droid)"),
+    ("nav_down", "Menu down (also: next variant when adding a droid)"),
+    ("nav_left", "Menu left (change a trait / Kyber colour)"),
+    ("nav_right", "Menu right (change a trait / Kyber colour)"),
 ]
+NAV_ACTIONS = ("nav_up", "nav_down", "nav_left", "nav_right")
 APP_WINDOW_TITLE = "Droid Tycoon Helper"
 _KEY_LABELS = {"page_up": "Page Up", "page_down": "Page Down", "esc": "Esc",
                "caps_lock": "Caps Lock", "num_lock": "Num Lock", "scroll_lock": "Scroll Lock",
@@ -498,11 +505,19 @@ def hk_label(action):
     return pretty_key(hk(action))
 
 
-def hotkey_problem(name):
+def nav_label(which):
+    """'Up/Down' (or the keys they're set to, e.g. 'I/K'); which = 'ud' or 'lr'."""
+    a, b = ("nav_up", "nav_down") if which == "ud" else ("nav_left", "nav_right")
+    if hk(a) in ("up", "left") and hk(b) in ("down", "right"):
+        return "Up/Down" if which == "ud" else "Left/Right"
+    return f"{hk_label(a)}/{hk_label(b)}"
+
+
+def hotkey_problem(name, action=None):
     """Why a key can't be a hotkey (it's needed in the game or by the app), or ''."""
     game = set(cfg["allowed_keys"].lower()) | {ikey(), "w", "a", "s", "d"}
-    if name in ("up", "down", "left", "right"):
-        return "Arrow keys are used by the on-screen menus"
+    if name in ("up", "down", "left", "right") and action not in NAV_ACTIONS:
+        return "Arrow keys are only for the menu Up/Down/Left/Right keys"
     if name in ("esc", "enter", "space", "tab", "backspace"):
         return f"{pretty_key(name)} is needed in the game"
     if name.startswith(("shift", "ctrl", "alt", "cmd")):
@@ -518,13 +533,17 @@ def finish_capture(name):
     if name == "esc":
         state["hk_capture"], state["hk_error"] = None, ""
         return
-    why = hotkey_problem(name)
+    why = hotkey_problem(name, action)
     if why:
         state["hk_error"] = why                   # keep waiting for another key
         return
     old = hk(action)
     for other, k in cfg["hotkeys"].items():       # taken? swap the two
         if other != action and k == name:
+            if old in ("up", "down", "left", "right") and other not in NAV_ACTIONS:
+                state["hk_error"] = (f"{pretty_key(name)} is the {dict(HOTKEY_ACTIONS)[other]} key"
+                                     " - change that one first")
+                return
             cfg["hotkeys"][other] = old
     cfg["hotkeys"][action] = name
     cfg["inv_add_key"], cfg["inv_remove_key"] = hk("inv_add"), hk("inv_remove")
@@ -542,6 +561,7 @@ def on_key(key):
     if foreground_title() == APP_WINDOW_TITLE:
         return                                    # typing in the app window - not for us
     act = next((a for a, k in cfg["hotkeys"].items() if k and k == name), None)
+    nav = {"nav_up": "up", "nav_down": "down", "nav_left": "left", "nav_right": "right"}.get(act)
     if act == "menu":
         if state["enabled"]:                      # running -> stop
             state["enabled"] = False
@@ -569,7 +589,7 @@ def on_key(key):
             start_mode()
         elif state["menu_open"]:                  # trait picker -> start rolling
             if not any(v != "off" for v in cfg["trait_wanted"].values()):
-                notify("Turn on at least one trait first (Left/Right)")
+                notify(f"Turn on at least one trait first ({nav_label('lr')})")
                 return
             save_config()
             start_mode()
@@ -577,12 +597,11 @@ def on_key(key):
             state["menu_open"], state["menu_stage"] = True, "mode"
             state["menu_choice"] = MODES.index(state["mode"])
             state["menu_time"] = time.time()
-    elif (key in (K.up, K.down, K.left, K.right) and not state["menu_open"]
-          and adjust_pending(key)):
+    elif nav and not state["menu_open"] and adjust_pending(nav):
         pass
-    elif key in (K.up, K.down) and state["menu_open"]:
+    elif nav in ("up", "down") and state["menu_open"]:
         state["menu_time"] = time.time()
-        step = 1 if key == K.down else -1
+        step = 1 if nav == "down" else -1
         if state["menu_stage"] == "mode":
             state["menu_choice"] = (state["menu_choice"] + step) % len(MODES)
         elif state["menu_stage"] in ("droids", "clicker"):
@@ -590,9 +609,9 @@ def on_key(key):
             state["choice_index"] = (state["choice_index"] + step) % n
         else:
             state["pick_index"] = (state["pick_index"] + step) % (len(TRAIT_NAMES) + 1)
-    elif key in (K.left, K.right) and state["menu_open"] and state["menu_stage"] == "traits":
+    elif nav in ("left", "right") and state["menu_open"] and state["menu_stage"] == "traits":
         state["menu_time"] = time.time()
-        step = 1 if key == K.right else -1
+        step = 1 if nav == "right" else -1
         if state["pick_index"] == len(TRAIT_NAMES):          # last row: cost limit
             cur = cfg["max_cost"] if cfg["max_cost"] in COST_STEPS else "500T"
             i = min(len(COST_STEPS) - 1, max(0, COST_STEPS.index(cur) + step))   # stops at the ends
@@ -612,7 +631,8 @@ def on_key(key):
     elif act == "area" and not state["enabled"]:   # not while a mode is running
         state["select_area"] = True
     elif act == "snapshot":
-        state["snapshot"] = True
+        state["snapshot"] = True                  # fishing pictures (when fishing)
+        threading.Thread(target=save_screen_debug, daemon=True).start()
     elif act == "quit":
         state["quit"] = True
         return False
@@ -920,6 +940,39 @@ def save_debug(img, tiles, keys, strip):
            f"{''.join(keys).upper() or '(nothing)'}")
 
 
+def save_screen_debug():
+    """Debug key: a full screenshot plus what the trait reader makes of it, in the
+    debug folder (keeps the last 10). Lets a player show what the app sees."""
+    try:
+        with mss.mss() as sct:
+            img = grab_screen(sct)
+        notes = []
+        try:
+            m = find_menu(img)
+            notes.append(f"menu: {m[0]} button '{m[1]['text']}' at {m[1]['cx']},{m[1]['cy']}" if m
+                         else "menu: none found")
+            texts = [white_text(img, (0.2, 0.56, 0.5, 0.70)),
+                     white_text(img, (0.2, 0.56, 0.5, 0.70), any_bright=True)]
+            notes.append(f"trait text: {texts} -> {identify_trait(texts) or '?'}")
+            notes.append(f"trait colour: {trait_tier(img) or '?'}")
+        except Exception as e:
+            notes.append(f"reader error: {e}")
+        folder = os.path.join(BASE_DIR, "debug")
+        os.makedirs(folder, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        cv2.imwrite(os.path.join(folder, f"screen_{stamp}.png"), img)
+        with open(os.path.join(folder, f"screen_{stamp}.txt"), "w") as f:
+            f.write(f"Droid Tycoon Helper v{VERSION}\nscreen {img.shape[1]}x{img.shape[0]}\n"
+                    + "\n".join(notes) + "\n")
+        old = sorted(x for x in os.listdir(folder) if x.startswith("screen_"))
+        for x in old[:-20]:                        # 10 pictures + their notes
+            os.remove(os.path.join(folder, x))
+        print("Debug screenshot:", "; ".join(notes))
+        notify("Debug screenshot saved (debug folder)", 3)
+    except Exception as e:
+        print("Debug screenshot failed:", e)
+
+
 def scanner():
     """Background loop: grab the screen, find the tiles, read them, press them."""
     last_pressed, last_press_time, previous, first_seen = [], 0.0, None, 0.0
@@ -1018,17 +1071,26 @@ def fuzzy_contains(text, word, ratio=0.8):
     return False
 
 
-def yellow_buttons(bgr):
-    """Solid yellow menu buttons (SELECT, credit cost, TRAIT GUIDE) with their text."""
+def yellow_buttons(bgr, any_colour=False, bright=185):
+    """Solid yellow menu buttons (SELECT, credit cost, TRAIT GUIDE) with their text.
+    any_colour=True: any bright solid box instead (for colourblind filters that turn
+    the yellow buttons pink/blue) - the button text then decides what it is."""
     H, W = bgr.shape[:2]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, (18, 150, 180), (35, 255, 255))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    if any_colour:
+        mask = ((hsv[:, :, 2] > bright) & (hsv[:, :, 1] > 25)).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+    else:
+        # yellow, or orange while the mouse is over it (hover glow is hue ~15-17)
+        mask = cv2.inRange(hsv, (10, 150, 180), (35, 255, 255))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
     buttons = []
     for i in range(1, n):
         x, y, w, h, area = stats[i]
         if w > 0.08 * W and h > 0.03 * H and 2.5 < w / h < 9 and area / (w * h) > 0.6:
+            if any_colour and (w > 0.3 * W or h > 0.12 * H):
+                continue                              # sky / big bright patch, not a button
             gray = cv2.cvtColor(bgr[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)
             _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             bw = cv2.copyMakeBorder(bw, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=255)
@@ -1038,26 +1100,41 @@ def yellow_buttons(bgr):
     return buttons
 
 
+_menu_pass = {"last": None}      # which button search worked last (colourblind users: a fallback)
+
+
 def find_menu(bgr, side=None):
     """('select', SELECT button of the chosen droid) or ('panel', credit button) or None."""
-    buttons = yellow_buttons(bgr)
-    guide = [b for b in buttons if fuzzy_contains(b["text"], "GUIDE", 0.75)]
-    if guide:
-        g = guide[0]
-        above = [b for b in buttons if b["y"] < g["y"] and abs(b["cx"] - g["cx"]) < g["w"] * 0.3]
-        if above:
-            return "panel", max(above, key=lambda b: b["y"])
-    selects = [b for b in buttons if fuzzy_contains(b["text"], "SELECT", 0.75)]
-    if selects:
-        side = side or state.get("trait_side", "left")
+    side = side or state.get("trait_side", "left")
+    mid = bgr.shape[1] / 2
+    passes = [None, 185, 225, 245]                # None = the yellow search, numbers = any colour
+    if _menu_pass["last"] in passes:              # try what worked last time first
+        passes.remove(_menu_pass["last"])
+        passes.insert(0, _menu_pass["last"])
+    first_none = None
+    for p in passes:
+        buttons = yellow_buttons(bgr) if p is None else yellow_buttons(bgr, any_colour=True, bright=p)
+        guide = [b for b in buttons if fuzzy_contains(b["text"], "GUIDE", 0.75)]
+        if guide:
+            g = guide[0]
+            above = [b for b in buttons if b["y"] < g["y"] and abs(b["cx"] - g["cx"]) < g["w"] * 0.3]
+            if above:
+                _menu_pass["last"] = p
+                return "panel", max(above, key=lambda b: b["y"])
+        selects = [b for b in buttons if fuzzy_contains(b["text"], "SELECT", 0.75)]
         # The two SELECT buttons sit either side of the screen's middle. While the menu
         # pops in/out only one may be visible - so go by which half it's in, never by
         # "the rightmost one we can see" (that picked the LEFT droid by mistake).
-        mid = bgr.shape[1] / 2
         mine = [b for b in selects if (b["cx"] > mid) == (side == "right")]
-        if not mine:
-            return None                           # our droid's button isn't up yet
-        return "select", (max if side == "right" else min)(mine, key=lambda b: b["x"])
+        if mine:
+            _menu_pass["last"] = p
+            return "select", (max if side == "right" else min)(mine, key=lambda b: b["x"])
+        if p is None and not selects and not guide and _menu_pass["last"] is None:
+            # normal colours and nothing yellow-ish with menu text: usually just no menu
+            # up. Still try the colour-free search, but only every few calls (it's slower).
+            _menu_pass["skip"] = _menu_pass.get("skip", 0) + 1
+            if _menu_pass["skip"] % 3:
+                return None
     return None
 
 
@@ -1126,11 +1203,22 @@ def droid_card_check(bgr, button):
     return "unsure", shown
 
 
+def ui_box(bgr, box):
+    """A box given as fractions of a 16:9 screen -> pixels on this screen. Fortnite
+    scales its menus by the screen height and keeps them centred, so on ultrawide
+    (21:9) or 16:10 screens they sit in a centred 16:9 area, not at the same fractions."""
+    H, W = bgr.shape[:2]
+    vw = H * 16 / 9                               # width of the centred 16:9 area
+    left = (W - vw) / 2
+    x0 = int(max(0, min(W - 1, left + box[0] * vw)))
+    x1 = int(max(x0 + 1, min(W, left + box[2] * vw)))
+    return x0, int(box[1] * H), x1, int(box[3] * H)
+
+
 def white_text(bgr, box, any_bright=False):
     """Read white (or any bright, for coloured names) text inside a box given as
-    fractions of the screen."""
-    H, W = bgr.shape[:2]
-    x0, y0, x1, y1 = int(box[0] * W), int(box[1] * H), int(box[2] * W), int(box[3] * H)
+    fractions of a 16:9 screen (see ui_box)."""
+    x0, y0, x1, y1 = ui_box(bgr, box)
     hsv = cv2.cvtColor(bgr[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
     if any_bright:
         mask = (hsv[:, :, 2] > 150).astype(np.uint8) * 255
@@ -1153,9 +1241,10 @@ def colour_count(part):
 
 def rainbow_trait(bgr):
     """True if the trait in the panel is rainbow tier (rainbow icon or rainbow name)."""
-    H, W = bgr.shape[:2]
-    icon = bgr[int(0.65 * H):int(0.84 * H), int(0.29 * W):int(0.42 * W)]
-    name = bgr[int(0.57 * H):int(0.615 * H), int(0.26 * W):int(0.45 * W)]
+    x0, y0, x1, y1 = ui_box(bgr, (0.29, 0.65, 0.42, 0.84))
+    icon = bgr[y0:y1, x0:x1]
+    x0, y0, x1, y1 = ui_box(bgr, (0.26, 0.57, 0.45, 0.615))
+    name = bgr[y0:y1, x0:x1]
     return colour_count(icon) >= 3 or colour_count(name) >= 3
 
 
@@ -1257,8 +1346,8 @@ def next_droid(msg):
 
 def trait_tier(bgr):
     """'default' (teal), 'gold', 'diamond' or 'rainbow' from the panel's trait icon."""
-    H, W = bgr.shape[:2]
-    icon = bgr[int(0.65 * H):int(0.84 * H), int(0.29 * W):int(0.42 * W)]
+    x0, y0, x1, y1 = ui_box(bgr, (0.29, 0.65, 0.42, 0.84))
+    icon = bgr[y0:y1, x0:x1]
     if rainbow_trait(bgr):
         return "rainbow"
     hsv = cv2.cvtColor(icon, cv2.COLOR_BGR2HSV).reshape(-1, 3)
@@ -1269,9 +1358,24 @@ def trait_tier(bgr):
     hue = float(np.median(hsv[vivid, 0])) if vivid.any() else -1
     if 10 <= hue <= 40:
         return "gold"
+    if hue >= 0:
+        hue += panel_hue_shift(bgr)               # undo a colourblind filter's colour shift
     if 78 <= hue <= 92:
         return "default"
     return "diamond"                               # light blue / white (best guess)
+
+
+def panel_hue_shift(bgr):
+    """The trait panel is the same blue (hue 100) for everyone - unless Fortnite's
+    colourblind mode is on, which moves it to about 92. Returns how far to move a
+    colour back (0 when it can't tell)."""
+    x0, y0, x1, y1 = ui_box(bgr, (0.2, 0.1, 0.6, 0.85))
+    hsv = cv2.cvtColor(bgr[y0:y1, x0:x1], cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    m = (hsv[:, 1] > 110) & (hsv[:, 2] > 120) & (hsv[:, 0] > 60) & (hsv[:, 0] < 130)
+    if m.sum() < 2000:
+        return 0
+    ref = float(np.median(hsv[m, 0]))
+    return 100 - ref if 84 <= ref <= 108 else 0
 
 
 def parse_amount(text):
@@ -2502,7 +2606,7 @@ def show_pending(note=""):
     if iconic:
         vtext = "ICONIC"
     elif not p["variant"]:
-        vtext = "?  (Up/Down to pick)"
+        vtext = f"?  ({nav_label('ud')} to pick)"
     else:
         vtext = p["variant"]
         if p["variant"] == "KYBER":
@@ -2511,27 +2615,27 @@ def show_pending(note=""):
     lines = [f"Droid: {p['name'].upper()}", f"Variant: {vtext}",
              f"{verb} {p['player']}? Press {p['key']} again"]
     if not iconic:
-        lines.append("Wrong? Up/Down variant" + (" \u00b7 Left/Right colour"
+        lines.append(f"Wrong? {nav_label('ud')} variant" + (f" \u00b7 {nav_label('lr')} colour"
                                                   if p["variant"] == "KYBER" else ""))
     if note:
         lines.append(note)
     inv_show(lines, max(1, p["expires"] - time.time()), RED if note else None)
 
 
-def adjust_pending(key):
-    """Up/Down change the variant, Left/Right the Kyber colour, while confirming."""
+def adjust_pending(nav):
+    """Up/Down change the variant, Left/Right the Kyber colour, while confirming.
+    nav = "up" / "down" / "left" / "right" (the menu keys, whatever they're set to)."""
     p = state.get("inv_pending")
     if not p or time.time() > p["expires"] or DROID_RARITY.get(p["name"]) == "Iconic":
         return False
-    K = keyboard.Key
-    if key in (K.up, K.down):
-        step = 1 if key == K.down else -1
+    if nav in ("up", "down"):
+        step = 1 if nav == "down" else -1
         i = VARIANTS.index(p["variant"]) if p["variant"] in VARIANTS else (-1 if step > 0 else 0)
         p["variant"] = VARIANTS[(i + step) % len(VARIANTS)]
-    elif key in (K.left, K.right) and p["variant"] == "KYBER":
+    elif nav in ("left", "right") and p["variant"] == "KYBER":
         cols = list(KYBER_NAMES)
         cur = p.get("kyber") or cfg["kyber_default"]
-        p["kyber"] = cols[(cols.index(cur) + (1 if key == K.right else -1)) % len(cols)]
+        p["kyber"] = cols[(cols.index(cur) + (1 if nav == "right" else -1)) % len(cols)]
     else:
         return False
     p["expires"] = time.time() + 12
@@ -2557,7 +2661,7 @@ def inventory_hotkey(action):
         try:
             if pend and pend["action"] == action and time.time() < pend["expires"]:
                 if not pend["variant"] and DROID_RARITY.get(pend["name"]) != "Iconic":
-                    show_pending("Pick the variant with Up/Down first")
+                    show_pending(f"Pick the variant with {nav_label('ud')} first")
                     return
                 state["inv_pending"] = None
                 inv_show("Saving\u2026", 5)
@@ -3899,7 +4003,7 @@ def run_windows():
             reading.config(text="")
             pressed.config(text="")
             stats.config(text="Iconic droids are never rolled." if stage == "droids" else "")
-            hints.config(text=f"Up/Down choose \u00b7 {hk_label('menu')} next")
+            hints.config(text=f"{nav_label('ud')} choose \u00b7 {hk_label('menu')} next")
         elif picking:
             title.config(text="TRAITS \u2013 STOP ON WHICH?", fg=FG)
             badge = {"off": "  \u00b7  ", "any": " ANY ", "diamond": "DIAMOND", "rainbow": "RAINBOW"}
@@ -3915,7 +4019,7 @@ def run_windows():
             reading.config(text="")
             pressed.config(text="")
             stats.config(text="")
-            hints.config(text=f"Up/Down move \u00b7 Left/Right change \u00b7 {hk_label('menu')} start")
+            hints.config(text=f"{nav_label('ud')} move \u00b7 {nav_label('lr')} change \u00b7 {hk_label('menu')} start")
         elif state["menu_open"]:
             title.config(text="DROID TYCOON HELPER \u2013 CHOOSE MODE", fg=FG)
             rows = [("\u25b6 " if state["menu_choice"] == i else "    ") + n
@@ -3923,7 +4027,7 @@ def run_windows():
             reading.config(text=rows[0])
             pressed.config(text=rows[1])
             stats.config(text=rows[2], fg=FG, font=("Segoe UI", 11))
-            hints.config(text=f"Up/Down choose \u00b7 {hk_label('menu')} start")
+            hints.config(text=f"{nav_label('ud')} choose \u00b7 {hk_label('menu')} start")
         else:
             if state["error"]:
                 title.config(text="DROID TYCOON HELPER \u2013 PROBLEM", fg=RED)
