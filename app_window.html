@@ -180,6 +180,8 @@ button{cursor:pointer}
 .sys .key{font-family:var(--mono);background:var(--panel-2);border:1px solid var(--line-2);border-bottom-width:3px;border-radius:6px;padding:2px 10px;min-width:6.5rem;text-align:center;white-space:nowrap}
 .sys .key.wait{border-color:var(--accent);color:var(--accent);animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.45}}
+.sys .hkgroup{grid-column:1/-1;font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.sys .hkgroup:first-child{margin-top:0;padding-top:0;border-top:0}
 .sys .hkerr{grid-column:1/-1;color:var(--bad);font-size:.8rem;margin:-2px 0 4px}
 .sys .pending{font-family:var(--mono);background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;white-space:pre-line;min-height:3.2em}
 .sys .pending.empty{color:var(--muted);font-family:var(--body)}
@@ -687,25 +689,16 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
         </section>
 
         <!-- HOTKEYS -->
-        <section class="page" id="p-hotkeys">
-          <div class="grid even">
-            <div class="card">
-              <h3>Hotkeys <span class="sub">work while you're in the game</span></h3>
-              <div class="hk" id="hk-list"></div>
-              <div class="row"><button class="btn" id="hk-reset" type="button">Reset to defaults</button></div>
-            </div>
-            <div class="card">
-              <h3>How it works</h3>
-              <p class="note">Click <b>Change</b>, then press the new key. Esc cancels. If another action already uses that key, the two swap.</p>
-              <p class="note">Keys the game needs can't be used: the fishing letters, your Interact key (<span class="ikey">F</span>), W A S D, Space, Enter, Esc and the arrow keys (the arrows run the on-screen menus).</p>
-              <p class="note">Hotkeys are switched off while this window is in front, so typing here never triggers them.</p>
-            </div>
-          </div>
-        </section>
-
         <!-- SETTINGS -->
         <section class="page" id="p-settings">
           <div class="grid even">
+            <div class="card" id="s-hotkeys" style="grid-column:1/-1">
+              <h3>Hotkeys <span class="sub">work while you're in the game</span></h3>
+              <p class="note">Click <b>Change</b>, then press the new key (Esc cancels). If another action already uses that key, the two swap. Small keyboard with no Insert, Page Up or arrow keys? Set these to keys you have.</p>
+              <div class="hk" id="hk-list"></div>
+              <div class="row"><button class="btn" id="hk-reset" type="button">Reset to defaults</button></div>
+              <p class="note">Keys the game needs can't be used: the fishing letters, your Interact key (<span class="ikey">F</span>), W A S D, Space, Enter and Esc. The arrow keys can only be used for the menu keys. Hotkeys are switched off while this window is in front, so typing here never triggers them.</p>
+            </div>
             <div class="card">
               <h3>In-game overlay</h3>
               <label class="switch"><input type="checkbox" id="s-overlay"><span>Show the overlay box</span></label>
@@ -1684,7 +1677,6 @@ const PAGES={
   traits:["Traits","Rerolls droid traits at the scanner until you get one you want.","sys"],
   clicker:["Auto Clicker","Scrap Hit clicking or Potion Grab.","sys"],
   scanner:["Droid Scanner","Add droids to your inventory straight from the game.","sys"],
-  hotkeys:["Hotkeys","Change any hotkey on the fly.","sys"],
   settings:["Settings","Overlay, updates, pictures and account.","sys"]};
 const DATA_TAB={inv:"inv",reb:"reb",base:"base",fus:"fus",chips:"chips",sdex:"inv"};
 let S=null, page=null, pickedMode="fishing", misses=0, lastDataVer=null, sentPlayer=null, lastSig=null;
@@ -1741,6 +1733,8 @@ window.APP={
 
 /* ---------- navigation ---------- */
 function show(pg){
+  if(pg==="hotkeys"){show("settings");$("s-hotkeys").scrollIntoView({block:"start"});
+    document.querySelectorAll(".sb-i[data-page]").forEach(b=>b.setAttribute("aria-current",b.dataset.page==="hotkeys"?"page":"false"));return}
   if(!PAGES[pg]) pg="inv";
   page=pg; store.set("page",pg);
   document.querySelectorAll(".sb-i[data-page]").forEach(b=>b.setAttribute("aria-current",b.dataset.page===pg?"page":"false"));
@@ -2023,7 +2017,8 @@ function renderHotkeys(){
   const keys=JSON.stringify([S.hotkeys,S.capture,S.capture_error]);
   if(keys!==hkKeys){hkKeys=keys;
     $("hk-list").innerHTML=S.hotkeys.map(h=>{const w=S.capture===h.id;
-      return `<span>${esc2(h.label)}</span><span class="key${w?" wait":""}">${w?"Press a key…":esc2(h.pretty)}</span>
+      const head=h.id==="menu"?`<span class="hkgroup">Main keys</span>`:h.id==="nav_up"?`<span class="hkgroup">Menu keys &middot; move around the in-game menus</span>`:"";
+      return `${head}<span>${esc2(h.label)}</span><span class="key${w?" wait":""}">${w?"Press a key…":esc2(h.pretty)}</span>
         <button class="btn" type="button" data-hk="${esc2(h.id)}" data-cancel="${w}">${w?"Cancel":"Change"}</button>
         ${w&&S.capture_error?`<span class="hkerr">${esc2(S.capture_error)} – try another key.</span>`:""}`}).join("");
   }

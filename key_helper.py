@@ -553,7 +553,6 @@ def finish_capture(name):
 
 
 def on_key(key):
-    K = keyboard.Key
     name = key_name(key)
     if state.get("hk_capture"):
         finish_capture(name)
@@ -1111,7 +1110,6 @@ def find_menu(bgr, side=None):
     if _menu_pass["last"] in passes:              # try what worked last time first
         passes.remove(_menu_pass["last"])
         passes.insert(0, _menu_pass["last"])
-    first_none = None
     for p in passes:
         buttons = yellow_buttons(bgr) if p is None else yellow_buttons(bgr, any_colour=True, bright=p)
         guide = [b for b in buttons if fuzzy_contains(b["text"], "GUIDE", 0.75)]
