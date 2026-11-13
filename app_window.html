@@ -86,6 +86,8 @@ button{cursor:pointer}
 .tgrid td button[aria-pressed="true"] svg{opacity:1}
 .tgrid button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .sys .col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.sys ol.steps{margin:4px 0 12px;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:.9rem;line-height:1.45}
+.sys ol.steps b{font-weight:700}
 .tlog{display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}
 .tlog div{display:flex;gap:12px;align-items:baseline;padding:5px 10px;border-radius:7px;font-size:.88rem}
 .tlog div.hit{background:color-mix(in srgb,var(--accent) 14%,transparent)}
@@ -620,7 +622,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
             <div class="card">
               <h3>Options</h3>
               <div class="field"><span class="lbl">Type</span>
-                <div class="seg" id="c-kind"><button type="button" data-v="scrap">Scrap Hit</button><button type="button" data-v="potion">Potion Grab</button></div>
+                <div class="seg" id="c-kind"><button type="button" data-v="scrap">Scrap Hit</button><button type="button" data-v="potion">Potion Grab</button><button type="button" data-v="farm">Auto Farm</button></div>
               </div>
               <div class="field" id="c-cps-f">
                 <label for="c-cps">Clicks per second</label>
@@ -630,7 +632,19 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
                 <label for="c-pot">Press <span class="ikey">F</span> every</label>
                 <div class="row" style="flex-wrap:nowrap"><input type="range" id="c-pot" min="2" max="20" step="1"><span class="rangeval" id="c-pot-v"></span></div>
               </div>
-              <label class="switch"><input type="checkbox" id="c-only"><span>Only while Fortnite is in front<small>Pauses when you switch to another window.</small></span></label>
+              <label class="switch" id="c-only-f"><input type="checkbox" id="c-only"><span>Only while Fortnite is in front<small>Pauses when you switch to another window.</small></span></label>
+            </div>
+            <div class="card" id="c-farm" style="grid-column:1/-1" hidden>
+              <h3>Auto Farm route <span class="sub" id="c-route-sub"></span></h3>
+              <ol class="steps">
+                <li>Stand at the start of your loop in Fortnite.</li>
+                <li>Press <b id="c-rec-key">F7</b>, then walk the loop once, over the collection pads and the chip spot, turning with the mouse as you normally would.</li>
+                <li>End where you started, <b>facing the same way</b>, and press <b id="c-rec-key2">F7</b> again.</li>
+                <li>Start Auto Farm (here as the type, or from the in-game menu). It walks that loop over and over.</li>
+              </ol>
+              <div class="pre" id="c-route"></div>
+              <div class="row"><button class="btn" id="c-route-del" type="button">Delete route</button></div>
+              <p class="note">Records your movement keys (W A S D, Space, Shift, Ctrl and other letters you press) and every mouse turn. Not your Interact key or the app's hotkeys. It pauses whenever Fortnite isn't in front. Small bumps add up over many loops, so if it slowly drifts off course, stop it, walk back to the start and start again. A shorter loop drifts less.</p>
             </div>
           </div>
         </section>
@@ -1711,7 +1725,7 @@ const PAGES={
   track:["Droid Tracker","A big alert at the top of the screen when a droid you want spawns.","sys"],
   fishing:["Fishing","Reads the key tiles and presses them for you.","sys"],
   traits:["Traits","Rerolls droid traits at the scanner until you get one you want.","sys"],
-  clicker:["Auto Clicker","Scrap Hit clicking or Potion Grab.","sys"],
+  clicker:["Auto Clicker","Scrap Hit clicking, Potion Grab or Auto Farm.","sys"],
   scanner:["Droid Scanner","Add droids to your inventory straight from the game.","sys"],
   settings:["Settings","Overlay, updates, pictures and account.","sys"]};
 const DATA_TAB={inv:"inv",reb:"reb",fus:"fus",chips:"chips",sdex:"inv"};
@@ -2015,6 +2029,15 @@ function renderClicker(){
   txt("c-earn",c.earnings||"Earnings show here while it runs (read from your balance in the game).");
   if(!busy("c-kind"))seg("c-kind",c.kind);
   $("c-cps-f").hidden=c.kind!=="scrap";$("c-pot-f").hidden=c.kind!=="potion";
+  $("c-farm").hidden=c.kind!=="farm"; $("c-only-f").hidden=c.kind==="farm";
+  txt("c-rec-key",c.record_key); txt("c-rec-key2",c.record_key);
+  const r=c.route;
+  txt("c-route-sub",c.recording?"\u25cf recording\u2026":r?`${r.length} s loop`:"none recorded");
+  txt("c-route",c.recording?`Recording - walk your loop, then press ${c.record_key} in Fortnite to stop.`:
+    r?`Loop length: ${r.length} s\nKeys: ${r.keys.join(", ")||"-"}\nMouse turns: ${r.moves?"yes":"none recorded"}`+
+      `\nRecorded: ${new Date(r.made*1000).toLocaleString()}`+(on&&c.kind==="farm"?`\nLoops done: ${c.loops}`:""):
+    "No route yet. Follow the steps above.");
+  $("c-route-del").disabled=!r||c.recording;
   val("c-cps",c.cps);if(!busy("c-cps"))txt("c-cps-v",c.cps+"/s");
   val("c-pot",c.potion_interval);if(!busy("c-pot"))txt("c-pot-v",c.potion_interval+" s");
   chk("c-only",c.only_fortnite);
@@ -2036,6 +2059,10 @@ function tGrid(T){
   }
   if(!busy("dt-grid"))g.querySelectorAll("td button").forEach(b=>b.setAttribute("aria-pressed",String(T.combos.includes(b.dataset.k))));
 }
+let routeDelArm=0;
+$("c-route-del").addEventListener("click",()=>{
+  if(Date.now()-routeDelArm>3000){routeDelArm=Date.now();toast("Click Delete route again to delete it");return}
+  routeDelArm=0;action("delete_route")});
 $("dt-grid").addEventListener("click",e=>{
   const b=e.target.closest("button"); if(!b)return;
   const g=$("dt-grid");

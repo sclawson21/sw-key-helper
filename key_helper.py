@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.10.10"
+VERSION = "1.11.0"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -184,7 +184,7 @@ DEFAULTS = {
     # --- Hotkeys (change them in the app window: Hotkeys tab) ---
     "hotkeys": {"menu": "insert", "reb_up": "page_up", "reb_down": "page_down",
                 "inv_add": "f9", "inv_remove": "f10", "area": "home",
-                "snapshot": "delete", "quit": "end",
+                "snapshot": "delete", "quit": "end", "farm_record": "f7",
                 "nav_up": "up", "nav_down": "down", "nav_left": "left", "nav_right": "right"},
     # --- App window (website on top, controls below) ---
     "website_url": "",          # your LMS Droid Tycoon website address
@@ -362,7 +362,8 @@ state = {
 MODES = ["fishing", "traits", "clicker"]
 MODE_NAMES = ["Fishing", "Traits (droid scanner)", "Auto Clicker"]
 DROID_CHOICES = [("left", "Left droid"), ("right", "Right droid"), ("both", "Both (take turns - faster)")]
-CLICKER_CHOICES = [("scrap", "Scrap Hit (keep left-clicking)"), ("potion", "Potion Grab (press Interact every few seconds)")]
+CLICKER_CHOICES = [("scrap", "Scrap Hit (keep left-clicking)"), ("potion", "Potion Grab (press Interact every few seconds)"),
+                   ("farm", "Auto Farm (walk your recorded route)")]
 COST_STEPS = ["off", "1B", "10B", "100B", "1T", "10T", "50T", "100T", "500T", "600T", "700T",
               "800T", "900T", "1Qa", "2Qa", "3Qa", "4Qa", "5Qa"]   # 5Qa is the cap
 SUFFIX = {"": 1, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12, "QA": 1e15, "QI": 1e18,
@@ -447,6 +448,7 @@ HOTKEY_ACTIONS = [            # (id, what it does) - keys live in cfg["hotkeys"]
     ("area", "Draw the fishing scan area"),
     ("snapshot", "Save debug pictures"),
     ("quit", "Quit Droid Tycoon Helper"),
+    ("farm_record", "Record the Auto Farm route (press to start, again to stop)"),
     ("nav_up", "Menu up (also: previous variant when adding a droid)"),
     ("nav_down", "Menu down (also: next variant when adding a droid)"),
     ("nav_left", "Menu left (change a trait / Kyber colour)"),
@@ -554,7 +556,23 @@ def finish_capture(name):
     notify(f"{dict(HOTKEY_ACTIONS)[action]}: {pretty_key(name)}", 3)
 
 
+def on_key_up(key):
+    """Key released - only needed while recording an Auto Farm route."""
+    rec = _farm.get("rec")
+    if rec:
+        name = key_name(key)
+        if name in rec["held"]:
+            rec["held"].discard(name)
+            rec["events"].append([round(time.perf_counter() - rec["t0"], 4), "k", name, 0])
+
+
 def on_key(key):
+    rec = _farm.get("rec")
+    if rec:
+        name = key_name(key)
+        if route_key_ok(name) and name not in rec["held"]:   # (ignore auto-repeat)
+            rec["held"].add(name)
+            rec["events"].append([round(time.perf_counter() - rec["t0"], 4), "k", name, 1])
     name = key_name(key)
     if state.get("hk_capture"):
         finish_capture(name)
@@ -631,6 +649,8 @@ def on_key(key):
         inventory_hotkey("remove")
     elif act == "area" and not state["enabled"]:   # not while a mode is running
         state["select_area"] = True
+    elif act == "farm_record":
+        toggle_route_recording()
     elif act == "snapshot":
         state["snapshot"] = True                  # fishing pictures (when fishing)
         threading.Thread(target=save_screen_debug, daemon=True).start()
@@ -688,7 +708,9 @@ def rebirth_hotkey(step):
 def change_speed(step):
     """+1 = faster, -1 = slower (fishing press delay, or the clicker's speed)."""
     if state["mode"] == "clicker":
-        if cfg["clicker_kind"] == "potion":       # faster = shorter wait
+        if cfg["clicker_kind"] == "farm":
+            notify("Auto Farm walks at your recorded speed")
+        elif cfg["clicker_kind"] == "potion":       # faster = shorter wait
             cfg["potion_interval"] = int(min(20, max(2, cfg["potion_interval"] - step)))
             notify(f"Potion Grab: {ikey_label()} every {cfg['potion_interval']} seconds")
         else:
@@ -1862,6 +1884,7 @@ def run_traits(sct):
                  "last_cost": None, "rolls": 0} for sd in sides}
     results = []
     turn = 0
+    wrong_panels = 0                              # panels that opened for the other droid
 
     def finish(side, msg):
         """This droid is done. Returns True if another droid is still rolling."""
@@ -1908,7 +1931,28 @@ def run_traits(sct):
 
             # 2. Pick the droid (left or right) - never an Iconic one.
             # While one droid is still rolling, F skips the Select Droid screen and opens
-            # the other (free) droid's panel straight away - that's this droid.
+            # the other (free) droid's panel straight away. That's only OUR droid if the
+            # other droid is the one rolling (Both mode). Otherwise OUR droid is still
+            # rolling and this panel belongs to the other droid - never roll it.
+            if found[0] == "panel":
+                other = "left" if side == "right" else "right"
+                other_rolling = (other in sides and info[other]["last_roll"] > st["last_roll"]
+                                 and time.time() - info[other]["last_roll"] < cfg["roll_wait"] + 3)
+                if not other_rolling:
+                    wrong_panels += 1
+                    print(f"Trait panel opened without Select Droid - it's the {other} droid's, "
+                          f"the {side} one is still rolling. Closing it and waiting.")
+                    pydirectinput.press("esc")
+                    if wrong_panels >= 8:
+                        stop_traits(f"The game kept opening the {other} droid instead of the "
+                                    f"{side} one - stopped so it isn't rolled by mistake")
+                        return
+                    state["status"] = f"Waiting for the {side} droid's roll to finish"
+                    if not traits_wait(0.8 + 0.3 * wrong_panels):
+                        return
+                    turn -= 1                     # same droid again
+                    continue
+            wrong_panels = 0
             if found[0] != "select" and not st["checked"]:
                 stop_traits("Couldn't see the Select Droid screen to check the droid's "
                             "rarity - stopped to be safe")
@@ -3132,7 +3176,11 @@ def fmt_duration(sec):
 
 
 def run_clicker():
-    """Scrap Hit: left-click continuously. Potion Grab: press F every few seconds."""
+    """Scrap Hit: left-click continuously. Potion Grab: press F every few seconds.
+    Auto Farm: walk the recorded route over and over."""
+    if cfg["clicker_kind"] == "farm":
+        run_farm()
+        return
     try:
         _run_clicker()
     finally:
@@ -3185,6 +3233,272 @@ def _run_clicker():
             time.sleep(delay)
         else:
             next_click = time.perf_counter()
+
+
+# -------------------------------------------------------------- auto farm ---
+# Record a walking route once (movement keys + the exact mouse turns), then replay it
+# over and over. Fortnite locks the cursor, so turns are read as RAW mouse movement
+# (what the game itself sees) and replayed the same way.
+
+FARM_FILE = "farm_route.json"
+_farm = {"rec": None, "loops": 0, "route": None}
+_PDI_KEYS = {"shift_r": "shiftright", "ctrl_l": "ctrlleft", "ctrl_r": "ctrlright"}
+
+
+def route_key_ok(name):
+    """Keys that go into a route: letters/digits you move with, Space, Shift, Ctrl -
+    never your Interact key or one of the app's own hotkeys."""
+    if name in cfg["hotkeys"].values() or name == ikey():
+        return False
+    return bool(re.fullmatch(r"[a-z0-9]", name)) or name in ("space", "shift", "shift_r",
+                                                              "ctrl_l", "ctrl_r")
+
+
+def load_route():
+    try:
+        with open(FARM_FILE) as f:
+            r = json.load(f)
+        return r if r.get("events") and r.get("length", 0) > 0.5 else None
+    except Exception:
+        return None
+
+
+def route_summary(r):
+    if not r:
+        return None
+    keys = sorted({e[2] for e in r["events"] if e[1] == "k"})
+    turn = sum(abs(e[2]) for e in r["events"] if e[1] == "m")
+    return {"length": round(r["length"], 1), "keys": [pretty_key(k) for k in keys],
+            "moves": sum(1 for e in r["events"] if e[1] == "m"), "turn": int(turn),
+            "made": r.get("made", 0)}
+
+
+def _raw_mouse_thread(rec):
+    """Collect raw mouse movement (Windows Raw Input) until rec['stop'] is set."""
+    import ctypes
+    from ctypes import wintypes
+    u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+    LRESULT = ctypes.c_ssize_t
+    WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                 wintypes.LPARAM)
+
+    class WNDCLASSW(ctypes.Structure):
+        _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
+                    ("cbWndExtra", ctypes.c_int), ("hInstance", wintypes.HINSTANCE),
+                    ("hIcon", wintypes.HICON), ("hCursor", wintypes.HANDLE),
+                    ("hbrBackground", wintypes.HBRUSH), ("lpszMenuName", wintypes.LPCWSTR),
+                    ("lpszClassName", wintypes.LPCWSTR)]
+
+    U16, U32, I32 = ctypes.c_uint16, ctypes.c_uint32, ctypes.c_int32   # exact Windows sizes
+
+    class RAWINPUTDEVICE(ctypes.Structure):
+        _fields_ = [("usUsagePage", U16), ("usUsage", U16), ("dwFlags", U32),
+                    ("hwndTarget", ctypes.c_void_p)]
+
+    class RAWINPUTHEADER(ctypes.Structure):
+        _fields_ = [("dwType", U32), ("dwSize", U32), ("hDevice", ctypes.c_void_p),
+                    ("wParam", ctypes.c_size_t)]
+
+    class RAWMOUSE(ctypes.Structure):
+        _fields_ = [("usFlags", U16), ("_pad", U16), ("usButtonFlags", U16), ("usButtonData", U16),
+                    ("ulRawButtons", U32), ("lLastX", I32), ("lLastY", I32),
+                    ("ulExtraInformation", U32)]
+
+    class RAWINPUT(ctypes.Structure):
+        _fields_ = [("header", RAWINPUTHEADER), ("mouse", RAWMOUSE), ("_spare", ctypes.c_byte * 16)]
+
+    u32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    u32.DefWindowProcW.restype = LRESULT
+    u32.GetRawInputData.argtypes = [ctypes.c_void_p, wintypes.UINT, ctypes.c_void_p,
+                                    ctypes.POINTER(wintypes.UINT), wintypes.UINT]
+    u32.CreateWindowExW.restype = wintypes.HWND
+    u32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+                                    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                    wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID]
+    raw = RAWINPUT()
+    hdr = ctypes.sizeof(RAWINPUTHEADER)
+
+    def proc(hwnd, msg, wparam, lparam):
+        if msg == 0x00FF:                                     # WM_INPUT
+            size = wintypes.UINT(ctypes.sizeof(raw))
+            if u32.GetRawInputData(ctypes.c_void_p(lparam), 0x10000003, ctypes.byref(raw),
+                                   ctypes.byref(size), hdr) != 0xFFFFFFFF:
+                m = raw.mouse
+                if raw.header.dwType == 0 and not (m.usFlags & 1) and (m.lLastX or m.lLastY):
+                    t = round(time.perf_counter() - rec["t0"], 4)
+                    ev = rec["events"]
+                    if ev and ev[-1][1] == "m" and t - ev[-1][0] < 0.008:
+                        ev[-1][2] += m.lLastX                 # merge into ~8 ms steps
+                        ev[-1][3] += m.lLastY
+                    else:
+                        ev.append([t, "m", m.lLastX, m.lLastY])
+        return u32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    wndproc = WNDPROC(proc)
+    hinst = k32.GetModuleHandleW(None)
+    wc = WNDCLASSW()
+    wc.lpfnWndProc = wndproc
+    wc.hInstance = hinst
+    wc.lpszClassName = "DTHRouteRecorder"
+    u32.RegisterClassW(ctypes.byref(wc))
+    hwnd = u32.CreateWindowExW(0, "DTHRouteRecorder", "", 0, 0, 0, 0, 0,
+                               wintypes.HWND(-3), None, hinst, None)   # message-only window
+    dev = RAWINPUTDEVICE(1, 2, 0x00000100, ctypes.c_void_p(hwnd))     # mouse, RIDEV_INPUTSINK
+    if not hwnd or not u32.RegisterRawInputDevices(ctypes.byref(dev), 1, ctypes.sizeof(dev)):
+        rec["mouse_error"] = "couldn't read the mouse"
+        return
+    msg = wintypes.MSG()
+    while not rec["stop"]:
+        while u32.PeekMessageW(ctypes.byref(msg), hwnd, 0, 0, 1):   # PM_REMOVE
+            u32.TranslateMessage(ctypes.byref(msg))
+            u32.DispatchMessageW(ctypes.byref(msg))
+        time.sleep(0.002)
+    dev = RAWINPUTDEVICE(1, 2, 0x00000001, None)                       # RIDEV_REMOVE
+    u32.RegisterRawInputDevices(ctypes.byref(dev), 1, ctypes.sizeof(dev))
+    u32.DestroyWindow(hwnd)
+    u32.UnregisterClassW("DTHRouteRecorder", hinst)
+
+
+def toggle_route_recording():
+    rec = _farm.get("rec")
+    if rec:                                                  # stop + save
+        rec["stop"] = True
+        end = round(time.perf_counter() - rec["t0"], 4)
+        for k in list(rec["held"]):                          # let go of anything still held
+            rec["events"].append([end, "k", k, 0])
+        _farm["rec"] = None
+        time.sleep(0.05)
+        events = sorted(rec["events"], key=lambda e: e[0])
+        if end < 2 or not any(e[1] == "k" for e in events):
+            notify("Route not saved - walk your loop between the two presses", 5)
+            return
+        route = {"events": events, "length": end, "made": int(time.time()), "v": 1}
+        try:
+            with open(FARM_FILE, "w") as f:
+                json.dump(route, f)
+        except Exception as e:
+            notify(f"Couldn't save the route: {e}", 6)
+            return
+        _farm["route"] = route
+        extra = f" ({rec['mouse_error']} - no turns)" if rec.get("mouse_error") else ""
+        notify(f"Route saved: {end:.0f} s{extra}. Pick Auto Farm in the Auto Clicker to run it.", 6)
+        print(f"Auto Farm route saved: {end:.1f} s, {len(events)} steps")
+        return
+    if state["enabled"]:
+        notify("Stop what's running first, then record the route", 4)
+        return
+    rec = {"t0": time.perf_counter(), "events": [], "held": set(), "stop": False}
+    if sys.platform == "win32":
+        threading.Thread(target=_raw_mouse_thread, args=(rec,), daemon=True).start()
+    _farm["rec"] = rec
+    notify(f"Recording route… walk your loop and end where you started, facing the same "
+           f"way. Press {hk_label('farm_record')} to stop.", 8)
+
+    def reminder():                                       # keep the overlay saying so
+        time.sleep(8)
+        while _farm.get("rec") is rec:
+            notify(f"\u25cf Recording route \u2013 {time.perf_counter() - rec['t0']:.0f} s \u00b7 "
+                   f"{hk_label('farm_record')} stops", 2)
+            time.sleep(1)
+    threading.Thread(target=reminder, daemon=True).start()
+
+
+def mouse_move_rel(dx, dy):
+    """Move the mouse by a raw amount, like a real mouse (what Fortnite reads)."""
+    if sys.platform != "win32" or not (dx or dy):
+        return
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", ctypes.c_int32), ("dy", ctypes.c_int32), ("mouseData", ctypes.c_uint32),
+                    ("dwFlags", ctypes.c_uint32), ("time", ctypes.c_uint32),
+                    ("dwExtraInfo", ctypes.c_size_t)]
+
+    class INPUT(ctypes.Structure):          # 40 bytes on 64-bit Windows (the union's size)
+        _fields_ = [("type", ctypes.c_uint32), ("mi", MOUSEINPUT)]
+    inp = INPUT(0, MOUSEINPUT(int(dx), int(dy), 0, 0x0001, 0, 0))           # MOUSEEVENTF_MOVE
+    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+
+def run_farm():
+    """Walk the recorded route again and again until stopped."""
+    route = load_route()
+    if not route:
+        state["enabled"] = False
+        notify(f"No route yet: in Fortnite press {hk_label('farm_record')}, walk your loop, "
+               f"press {hk_label('farm_record')} again", 8)
+        return
+    events, length = route["events"], route["length"]
+    held = set()
+
+    def key(name, down):
+        k = _PDI_KEYS.get(name, name)
+        (pydirectinput.keyDown if down else pydirectinput.keyUp)(k)
+        (held.add if down else held.discard)(name)
+
+    def release_all():
+        for n in list(held):
+            key(n, False)
+
+    def running():
+        return (state["enabled"] and state["mode"] == "clicker" and not state["quit"]
+                and cfg["clicker_kind"] == "farm")
+
+    winmm = ctypes.windll.winmm if sys.platform == "win32" else None
+    if winmm:
+        winmm.timeBeginPeriod(1)                             # 1 ms timing while replaying
+    _farm["loops"] = 0
+    last_tick = time.time()
+    sct = mss.mss()
+    next_sample = 0.0
+    try:
+        while running():
+            t0 = time.perf_counter()
+            i = 0
+            while i < len(events) and running():
+                # always pause outside Fortnite - never "walk" in another window
+                want = cfg["clicker_window"].strip().lower() or "fortnite"
+                if sys.platform == "win32" and want not in foreground_title().lower():
+                    release_all()
+                    was = set(held)
+                    paused = time.perf_counter()
+                    while running() and want not in foreground_title().lower():
+                        state["status"] = "Paused - Fortnite isn't in front"
+                        time.sleep(0.2)
+                    t0 += time.perf_counter() - paused         # carry on where it stopped
+                    for n in was:
+                        key(n, True)
+                    last_tick = time.time()
+                    continue
+                now = time.time()
+                state["active_secs"] += min(1.0, now - last_tick)
+                last_tick = now
+                if now >= next_sample:
+                    next_sample = now + 5
+                    try:
+                        track_earnings(sct)
+                    except Exception as e:
+                        print("Balance read failed:", e)
+                ev = events[i]
+                wait = t0 + ev[0] - time.perf_counter()
+                if wait > 0:
+                    time.sleep(min(wait, 0.01))
+                    continue
+                if ev[1] == "m":
+                    mouse_move_rel(ev[2], ev[3])
+                else:
+                    key(ev[2], bool(ev[3]))
+                i += 1
+                state["status"] = (f"Loop {_farm['loops'] + 1} · "
+                                   f"{min(ev[0], length):.0f}/{length:.0f} s")
+            while running() and time.perf_counter() < t0 + length:
+                time.sleep(0.005)
+            release_all()
+            if running():
+                _farm["loops"] += 1
+    finally:
+        release_all()
+        if winmm:
+            winmm.timeEndPeriod(1)
 
 
 # ----------------------------------------------------------- droid tracker ---
@@ -4048,7 +4362,12 @@ def run_windows():
                 where = (f"only while {cfg['clicker_window']} is in front"
                          if cfg["clicker_window"] else "anywhere")
                 active = fmt_duration(state.get("active_secs", 0))
-                if cfg["clicker_kind"] == "potion":
+                if cfg["clicker_kind"] == "farm":
+                    reading.config(text=f"Auto Farm \u00b7 Time active: {active}")
+                    pressed.config(text=f"Loops done: {_farm.get('loops', 0)} \u00b7 "
+                                        f"{state['status'] or DASH}")
+                    what = "Walks your recorded route, only while Fortnite is in front"
+                elif cfg["clicker_kind"] == "potion":
                     reading.config(text=f"Potion Grab \u00b7 Time active: {active}")
                     pressed.config(text=f"Every {cfg['potion_interval']}s \u00b7 "
                                         f"{state['status'] or DASH}")
@@ -4585,6 +4904,9 @@ def panel_state():
         },
         "clicker": {
             "kind": cfg["clicker_kind"], "cps": cfg["clicker_cps"],
+            "route": route_summary(_farm.get("route") or load_route()),
+            "recording": bool(_farm.get("rec")), "loops": _farm.get("loops", 0),
+            "record_key": hk_label("farm_record"),
             "potion_interval": cfg["potion_interval"],
             "only_fortnite": bool(cfg["clicker_window"].strip()),
             "active": fmt_duration(state.get("active_secs", 0)), "earnings": earn,
@@ -4799,6 +5121,13 @@ def panel_action(name, data):
         cfg["inv_add_key"], cfg["inv_remove_key"] = hk("inv_add"), hk("inv_remove")
         save_config()
         notify("Hotkeys reset to the defaults", 3)
+        return ""
+    if name == "delete_route":
+        _farm["route"] = None
+        try:
+            os.remove(FARM_FILE)
+        except OSError:
+            pass
         return ""
     if name == "save_window_place":
         place = app_window_rect()
@@ -5690,7 +6019,7 @@ def main():
     except Exception:
         state["error"] = "Tesseract not found - check tesseract_path in config.json"
         print(state["error"])
-    listener = keyboard.Listener(on_press=on_key)
+    listener = keyboard.Listener(on_press=on_key, on_release=on_key_up)
     listener.start()
     threading.Thread(target=rebirth_watch, daemon=True).start()
     threading.Thread(target=tracker_watch, daemon=True).start()
