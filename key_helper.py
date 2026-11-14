@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.11.0"
+VERSION = "1.11.1"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -189,6 +189,8 @@ DEFAULTS = {
     # --- App window (website on top, controls below) ---
     "website_url": "",          # your LMS Droid Tycoon website address
     "open_window_on_start": True,
+    "farm_lineup": True,        # Auto Farm: keep the camera lined up with the recorded views
+    "farm_gain": 1.0,           # Auto Farm: learned turn correction (replayed turns x this)
     "ui_scale": "auto",         # app window size: "auto" (from the monitor) or a % (70-150)
     "window_place": None,       # saved app window spot: {"x","y","w","h","max"} in screen pixels
     "panel_height": 360,
@@ -3347,22 +3349,65 @@ def _raw_mouse_thread(rec):
     if not hwnd or not u32.RegisterRawInputDevices(ctypes.byref(dev), 1, ctypes.sizeof(dev)):
         rec["mouse_error"] = "couldn't read the mouse"
         return
+    rec["tid"] = k32.GetCurrentThreadId()
     msg = wintypes.MSG()
-    while not rec["stop"]:
-        while u32.PeekMessageW(ctypes.byref(msg), hwnd, 0, 0, 1):   # PM_REMOVE
-            u32.TranslateMessage(ctypes.byref(msg))
-            u32.DispatchMessageW(ctypes.byref(msg))
-        time.sleep(0.002)
+    # GetMessage waits for each mouse report and handles it right away (polling with
+    # sleeps let reports pile up and lose some of the turning)
+    while not rec["stop"] and u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+        u32.TranslateMessage(ctypes.byref(msg))
+        u32.DispatchMessageW(ctypes.byref(msg))
     dev = RAWINPUTDEVICE(1, 2, 0x00000001, None)                       # RIDEV_REMOVE
     u32.RegisterRawInputDevices(ctypes.byref(dev), 1, ctypes.sizeof(dev))
     u32.DestroyWindow(hwnd)
     u32.UnregisterClassW("DTHRouteRecorder", hinst)
 
 
+FARM_VIEWS = "farm_views.npz"
+VIEW_EVERY = 0.5                                             # seconds between saved views
+
+
+def view_band(img):
+    """The part of the screen used to line the camera up: the upper middle (scenery),
+    away from the HUD and your character, greyscale and small."""
+    H, W = img.shape[:2]
+    g = cv2.cvtColor(img[int(H * 0.06):int(H * 0.38), int(W * 0.1):int(W * 0.9)], cv2.COLOR_BGR2GRAY)
+    return cv2.resize(g, (256, max(16, int(256 * g.shape[0] / g.shape[1]))),
+                      interpolation=cv2.INTER_AREA)
+
+
+_win = {}
+
+
+def view_shift(ref, cur):
+    """How far (pixels, + = right) the view moved from ref to cur, and how sure."""
+    key = ref.shape
+    if key not in _win:
+        _win[key] = cv2.createHanningWindow((ref.shape[1], ref.shape[0]), cv2.CV_32F)
+    (dx, _dy), resp = cv2.phaseCorrelate(ref.astype(np.float32), cur.astype(np.float32), _win[key])
+    return dx, resp
+
+
+def _view_recorder(rec):
+    """Save a small picture of the view every half second while recording."""
+    try:
+        with mss.mss() as sct:
+            nxt = 0.0
+            while not rec["stop"]:
+                t = time.perf_counter() - rec["t0"]
+                if t >= nxt:
+                    rec["views"].append((round(t, 3), view_band(grab_screen(sct))))
+                    nxt += VIEW_EVERY
+                time.sleep(0.02)
+    except Exception as e:
+        print("Couldn't save route views:", e)
+
+
 def toggle_route_recording():
     rec = _farm.get("rec")
     if rec:                                                  # stop + save
         rec["stop"] = True
+        if rec.get("tid") and sys.platform == "win32":     # wake the mouse reader so it ends
+            ctypes.windll.user32.PostThreadMessageW(rec["tid"], 0x0012, 0, 0)   # WM_QUIT
         end = round(time.perf_counter() - rec["t0"], 4)
         for k in list(rec["held"]):                          # let go of anything still held
             rec["events"].append([end, "k", k, 0])
@@ -3380,6 +3425,17 @@ def toggle_route_recording():
             notify(f"Couldn't save the route: {e}", 6)
             return
         _farm["route"] = route
+        views = [v for v in rec.get("views", []) if v[0] <= end]
+        try:
+            if views and len({v[1].shape for v in views}) == 1:
+                np.savez_compressed(FARM_VIEWS, t=np.array([v[0] for v in views]),
+                                    img=np.stack([v[1] for v in views]))
+            elif os.path.exists(FARM_VIEWS):
+                os.remove(FARM_VIEWS)
+        except Exception as e:
+            print("Couldn't save route views:", e)
+        cfg["farm_gain"] = 1.0                               # new route: learn afresh
+        save_config()
         extra = f" ({rec['mouse_error']} - no turns)" if rec.get("mouse_error") else ""
         notify(f"Route saved: {end:.0f} s{extra}. Pick Auto Farm in the Auto Clicker to run it.", 6)
         print(f"Auto Farm route saved: {end:.1f} s, {len(events)} steps")
@@ -3387,9 +3443,10 @@ def toggle_route_recording():
     if state["enabled"]:
         notify("Stop what's running first, then record the route", 4)
         return
-    rec = {"t0": time.perf_counter(), "events": [], "held": set(), "stop": False}
+    rec = {"t0": time.perf_counter(), "events": [], "held": set(), "stop": False, "views": []}
     if sys.platform == "win32":
         threading.Thread(target=_raw_mouse_thread, args=(rec,), daemon=True).start()
+    threading.Thread(target=_view_recorder, args=(rec,), daemon=True).start()
     _farm["rec"] = rec
     notify(f"Recording route… walk your loop and end where you started, facing the same "
            f"way. Press {hk_label('farm_record')} to stop.", 8)
@@ -3429,6 +3486,15 @@ def run_farm():
         return
     events, length = route["events"], route["length"]
     held = set()
+    views = None
+    if cfg.get("farm_lineup", True):
+        try:
+            with np.load(FARM_VIEWS) as z:
+                views = (list(z["t"]), list(z["img"]))
+        except Exception:
+            views = None
+    look = {"ppc": None, "gain": float(cfg.get("farm_gain", 1.0) or 1.0), "since": 0.0,
+            "fixes": 0, "last": ""}
 
     def key(name, down):
         k = _PDI_KEYS.get(name, name)
@@ -3443,6 +3509,43 @@ def run_farm():
         return (state["enabled"] and state["mode"] == "clicker" and not state["quit"]
                 and cfg["clicker_kind"] == "farm")
 
+    def turn(counts):                                        # a correcting turn, in a few steps
+        steps = max(1, int(abs(counts) // 60))
+        for k in range(steps):
+            mouse_move_rel(int(counts * (k + 1) / steps) - int(counts * k / steps), 0)
+            time.sleep(0.004)
+
+    def calibrate():
+        """How far the view moves per mouse count (a quick turn there and back)."""
+        a = view_band(grab_screen(sct))
+        turn(240)
+        time.sleep(0.25)
+        b = view_band(grab_screen(sct))
+        turn(-240)
+        time.sleep(0.2)
+        d, r = view_shift(a, b)
+        if r > 0.08 and abs(d) >= 4:
+            look["ppc"] = d / 240
+        else:
+            print("Auto Farm: couldn't measure the camera turn - lining up is off this run")
+
+    def check(ref, settle=False):
+        """Compare the screen with a recorded view and turn back on course."""
+        d, r = view_shift(ref, view_band(grab_screen(sct)))
+        if r < 0.08 or abs(d) > 100:                    # too different to trust
+            look["since"] = 0.0
+            return None
+        need = -d / look["ppc"]
+        if not settle and abs(look["since"]) > 150:        # learn how far turns come out
+            g = look["gain"] * (1 + need / look["since"])
+            look["gain"] = min(2.0, max(0.5, 0.5 * look["gain"] + 0.5 * g))
+        look["since"] = 0.0
+        if abs(d) > 1:
+            turn(need * (1.0 if settle else 0.8))
+            look["fixes"] += 1
+        look["last"] = f"off by {abs(d):.0f}px"
+        return d
+
     winmm = ctypes.windll.winmm if sys.platform == "win32" else None
     if winmm:
         winmm.timeBeginPeriod(1)                             # 1 ms timing while replaying
@@ -3452,8 +3555,21 @@ def run_farm():
     next_sample = 0.0
     try:
         while running():
+            if views and look["ppc"] is None and running():
+                state["status"] = "Measuring the camera turn\u2026"
+                calibrate()
+                if look["ppc"] is None:
+                    views = None
+            if views and running():                       # face the way the loop started
+                state["status"] = "Lining up the camera\u2026"
+                for _ in range(3):
+                    d = check(views[1][0], settle=True)
+                    if d is None or abs(d) <= 1.5:
+                        break
+                    time.sleep(0.15)
             t0 = time.perf_counter()
             i = 0
+            vi = 1                                        # next recorded view to compare with
             while i < len(events) and running():
                 # always pause outside Fortnite - never "walk" in another window
                 want = cfg["clicker_window"].strip().lower() or "fortnite"
@@ -3479,17 +3595,24 @@ def run_farm():
                     except Exception as e:
                         print("Balance read failed:", e)
                 ev = events[i]
+                if views and vi < len(views[0]) and time.perf_counter() - t0 >= views[0][vi]:
+                    check(views[1][vi])                   # back on course if it drifted
+                    vi += 1
+                    continue
                 wait = t0 + ev[0] - time.perf_counter()
                 if wait > 0:
                     time.sleep(min(wait, 0.01))
                     continue
                 if ev[1] == "m":
-                    mouse_move_rel(ev[2], ev[3])
+                    g = look["gain"]
+                    mouse_move_rel(round(ev[2] * g), round(ev[3] * g))
+                    look["since"] += ev[2] * g
                 else:
                     key(ev[2], bool(ev[3]))
                 i += 1
                 state["status"] = (f"Loop {_farm['loops'] + 1} · "
-                                   f"{min(ev[0], length):.0f}/{length:.0f} s")
+                                   f"{min(ev[0], length):.0f}/{length:.0f} s"
+                                   + (f" · on track ({look['last']})" if views and look["last"] else ""))
             while running() and time.perf_counter() < t0 + length:
                 time.sleep(0.005)
             release_all()
@@ -3499,6 +3622,10 @@ def run_farm():
         release_all()
         if winmm:
             winmm.timeEndPeriod(1)
+        if views and abs(look["gain"] - cfg.get("farm_gain", 1.0)) > 0.01:
+            cfg["farm_gain"] = round(look["gain"], 3)       # start right next time
+            save_config()
+            print(f"Auto Farm: turns replay at x{look['gain']:.2f} to match your recording")
 
 
 # ----------------------------------------------------------- droid tracker ---
@@ -4906,6 +5033,8 @@ def panel_state():
             "kind": cfg["clicker_kind"], "cps": cfg["clicker_cps"],
             "route": route_summary(_farm.get("route") or load_route()),
             "recording": bool(_farm.get("rec")), "loops": _farm.get("loops", 0),
+            "lineup": cfg.get("farm_lineup", True), "gain": cfg.get("farm_gain", 1.0),
+            "has_views": os.path.exists(FARM_VIEWS),
             "record_key": hk_label("farm_record"),
             "potion_interval": cfg["potion_interval"],
             "only_fortnite": bool(cfg["clicker_window"].strip()),
@@ -5063,6 +5192,8 @@ def panel_set(key, value):
         cfg[key] = int(_clamp_num(value, 10, 100))
     elif key == "tracker_seconds":
         cfg[key] = int(_clamp_num(value, 3, 20))
+    elif key == "farm_lineup":
+        cfg[key] = _as_bool(value)
     elif key == "ui_scale":
         cfg[key] = "auto" if value == "auto" else int(round(_clamp_num(value, 70, 150) / 5) * 5)
     elif key == "interact_key":
@@ -5124,10 +5255,11 @@ def panel_action(name, data):
         return ""
     if name == "delete_route":
         _farm["route"] = None
-        try:
-            os.remove(FARM_FILE)
-        except OSError:
-            pass
+        for f in (FARM_FILE, FARM_VIEWS):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
         return ""
     if name == "save_window_place":
         place = app_window_rect()

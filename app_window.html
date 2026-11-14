@@ -643,6 +643,7 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
                 <li>Start Auto Farm (here as the type, or from the in-game menu). It walks that loop over and over.</li>
               </ol>
               <div class="pre" id="c-route"></div>
+              <label class="switch"><input type="checkbox" id="c-lineup"><span>Keep the camera on course<small>While recording, it saves a small picture of your view twice a second. On replay it compares the screen with those pictures and turns the camera back if it drifted, and lines it up before every loop. It also learns if turns come out too short or too long and fixes them.</small></span></label>
               <div class="row"><button class="btn" id="c-route-del" type="button">Delete route</button></div>
               <p class="note">Records your movement keys (W A S D, Space, Shift, Ctrl and other letters you press) and every mouse turn. Not your Interact key or the app's hotkeys. It pauses whenever Fortnite isn't in front. Small bumps add up over many loops, so if it slowly drifts off course, stop it, walk back to the start and start again. A shorter loop drifts less.</p>
             </div>
@@ -2035,9 +2036,12 @@ function renderClicker(){
   txt("c-route-sub",c.recording?"\u25cf recording\u2026":r?`${r.length} s loop`:"none recorded");
   txt("c-route",c.recording?`Recording - walk your loop, then press ${c.record_key} in Fortnite to stop.`:
     r?`Loop length: ${r.length} s\nKeys: ${r.keys.join(", ")||"-"}\nMouse turns: ${r.moves?"yes":"none recorded"}`+
+      `\nCourse pictures: ${c.has_views?"saved":"none (record the route again to get them)"}`+
+      (Math.abs((c.gain||1)-1)>0.01?`\nTurn correction learned: x${(+c.gain).toFixed(2)}`:"")+
       `\nRecorded: ${new Date(r.made*1000).toLocaleString()}`+(on&&c.kind==="farm"?`\nLoops done: ${c.loops}`:""):
     "No route yet. Follow the steps above.");
   $("c-route-del").disabled=!r||c.recording;
+  chk("c-lineup",c.lineup);
   val("c-cps",c.cps);if(!busy("c-cps"))txt("c-cps-v",c.cps+"/s");
   val("c-pot",c.potion_interval);if(!busy("c-pot"))txt("c-pot-v",c.potion_interval+" s");
   chk("c-only",c.only_fortnite);
@@ -2059,6 +2063,7 @@ function tGrid(T){
   }
   if(!busy("dt-grid"))g.querySelectorAll("td button").forEach(b=>b.setAttribute("aria-pressed",String(T.combos.includes(b.dataset.k))));
 }
+$("c-lineup").addEventListener("change",e=>setting("farm_lineup",e.target.checked,"c-lineup"));
 let routeDelArm=0;
 $("c-route-del").addEventListener("click",()=>{
   if(Date.now()-routeDelArm>3000){routeDelArm=Date.now();toast("Click Delete route again to delete it");return}
