@@ -643,6 +643,12 @@ kbd{font-family:var(--mono);font-size:.78rem;background:var(--panel-2);border:1p
                 <li>Start Auto Farm (here as the type, or from the in-game menu). It walks that loop over and over.</li>
               </ol>
               <div class="pre" id="c-route"></div>
+              <div class="field">
+                <label for="c-anchor">Corner reset before each loop</label>
+                <div class="row"><select id="c-anchor" class="sel"></select>
+                  <select id="c-anchor-s" class="sel" style="min-width:6rem"><option value="0.5">0.5 s</option><option value="1">1 s</option><option value="1.5">1.5 s</option><option value="2">2 s</option><option value="3">3 s</option></select></div>
+                <p class="note">The surest way to stop drift: start your loop pressed into a corner or wall (for example where the pillar meets the stairs). Hold those keys, press <b id="c-rec-key3">F7</b>, then walk your loop and finish back in that corner. Before every loop the app walks you back into it, so any drift is wiped out.</p>
+              </div>
               <label class="switch"><input type="checkbox" id="c-lineup"><span>Keep the camera on course<small>While recording, it saves a small picture of your view twice a second. On replay it compares the screen with those pictures and turns the camera back if it drifted, and lines it up before every loop. It also learns if turns come out too short or too long and fixes them.</small></span></label>
               <div class="row"><button class="btn" id="c-route-del" type="button">Delete route</button></div>
               <p class="note">Records your movement keys (W A S D, Space, Shift, Ctrl and other letters you press) and every mouse turn. Not your Interact key or the app's hotkeys. It pauses whenever Fortnite isn't in front. Small bumps add up over many loops, so if it slowly drifts off course, stop it, walk back to the start and start again. A shorter loop drifts less.</p>
@@ -2041,7 +2047,12 @@ function renderClicker(){
       `\nRecorded: ${new Date(r.made*1000).toLocaleString()}`+(on&&c.kind==="farm"?`\nLoops done: ${c.loops}`:""):
     "No route yet. Follow the steps above.");
   $("c-route-del").disabled=!r||c.recording;
-  chk("c-lineup",c.lineup);
+  chk("c-lineup",c.lineup); txt("c-rec-key3",c.record_key);
+  const as=$("c-anchor"), ak=c.anchors.map(a=>a.id).join();
+  if(as.dataset.k!==ak){as.innerHTML=c.anchors.map(a=>`<option value="${a.id}">${a.id==="off"?"Off":"Push "+a.name.toLowerCase()}</option>`).join("");as.dataset.k=ak}
+  if(!busy("c-anchor"))as.value=c.anchor;
+  if(!busy("c-anchor-s"))$("c-anchor-s").value=String(+c.anchor_secs);
+  $("c-anchor-s").disabled=c.anchor==="off";
   val("c-cps",c.cps);if(!busy("c-cps"))txt("c-cps-v",c.cps+"/s");
   val("c-pot",c.potion_interval);if(!busy("c-pot"))txt("c-pot-v",c.potion_interval+" s");
   chk("c-only",c.only_fortnite);
@@ -2063,6 +2074,8 @@ function tGrid(T){
   }
   if(!busy("dt-grid"))g.querySelectorAll("td button").forEach(b=>b.setAttribute("aria-pressed",String(T.combos.includes(b.dataset.k))));
 }
+$("c-anchor").addEventListener("change",e=>setting("farm_anchor",e.target.value,"c-anchor"));
+$("c-anchor-s").addEventListener("change",e=>setting("farm_anchor_secs",+e.target.value,"c-anchor-s"));
 $("c-lineup").addEventListener("change",e=>setting("farm_lineup",e.target.checked,"c-lineup"));
 let routeDelArm=0;
 $("c-route-del").addEventListener("click",()=>{

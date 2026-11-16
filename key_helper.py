@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.11.1"
+VERSION = "1.11.2"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -191,6 +191,8 @@ DEFAULTS = {
     "open_window_on_start": True,
     "farm_lineup": True,        # Auto Farm: keep the camera lined up with the recorded views
     "farm_gain": 1.0,           # Auto Farm: learned turn correction (replayed turns x this)
+    "farm_anchor": "off",       # Auto Farm: push into a corner before each loop, e.g. "sa" = back+left
+    "farm_anchor_secs": 1.0,    # ...for this long
     "ui_scale": "auto",         # app window size: "auto" (from the monitor) or a % (70-150)
     "window_place": None,       # saved app window spot: {"x","y","w","h","max"} in screen pixels
     "panel_height": 360,
@@ -3243,6 +3245,8 @@ def _run_clicker():
 # (what the game itself sees) and replayed the same way.
 
 FARM_FILE = "farm_route.json"
+FARM_ANCHORS = {"off": "Off", "sa": "Back + left", "sd": "Back + right", "wa": "Forward + left",
+                "wd": "Forward + right", "s": "Back", "w": "Forward", "a": "Left", "d": "Right"}
 _farm = {"rec": None, "loops": 0, "route": None}
 _PDI_KEYS = {"shift_r": "shiftright", "ctrl_l": "ctrlleft", "ctrl_r": "ctrlright"}
 
@@ -3560,13 +3564,29 @@ def run_farm():
                 calibrate()
                 if look["ppc"] is None:
                     views = None
-            if views and running():                       # face the way the loop started
+            def line_up(tries=3):                         # face the way the loop started
                 state["status"] = "Lining up the camera\u2026"
-                for _ in range(3):
+                for _ in range(tries):
                     d = check(views[1][0], settle=True)
                     if d is None or abs(d) <= 1.5:
                         break
                     time.sleep(0.15)
+
+            if views and running():
+                line_up()
+            anchor = cfg.get("farm_anchor", "off")
+            if anchor in FARM_ANCHORS and anchor != "off" and running():
+                # walk back into the starting corner: whatever drift built up is gone
+                state["status"] = f"Back into the corner ({FARM_ANCHORS[anchor].lower()})\u2026"
+                for k in anchor:
+                    key(k, True)
+                end = time.time() + float(cfg.get("farm_anchor_secs", 1.0))
+                while running() and time.time() < end:
+                    time.sleep(0.02)
+                release_all()
+                time.sleep(0.15)
+                if views and running():
+                    line_up(2)
             t0 = time.perf_counter()
             i = 0
             vi = 1                                        # next recorded view to compare with
@@ -5034,6 +5054,8 @@ def panel_state():
             "route": route_summary(_farm.get("route") or load_route()),
             "recording": bool(_farm.get("rec")), "loops": _farm.get("loops", 0),
             "lineup": cfg.get("farm_lineup", True), "gain": cfg.get("farm_gain", 1.0),
+            "anchor": cfg.get("farm_anchor", "off"), "anchor_secs": cfg.get("farm_anchor_secs", 1.0),
+            "anchors": [{"id": k, "name": v} for k, v in FARM_ANCHORS.items()],
             "has_views": os.path.exists(FARM_VIEWS),
             "record_key": hk_label("farm_record"),
             "potion_interval": cfg["potion_interval"],
@@ -5194,6 +5216,12 @@ def panel_set(key, value):
         cfg[key] = int(_clamp_num(value, 3, 20))
     elif key == "farm_lineup":
         cfg[key] = _as_bool(value)
+    elif key == "farm_anchor":
+        if value not in FARM_ANCHORS:
+            return "bad value"
+        cfg[key] = value
+    elif key == "farm_anchor_secs":
+        cfg[key] = round(_clamp_num(value, 0.3, 4.0), 1)
     elif key == "ui_scale":
         cfg[key] = "auto" if value == "auto" else int(round(_clamp_num(value, 70, 150) / 5) * 5)
     elif key == "interact_key":
