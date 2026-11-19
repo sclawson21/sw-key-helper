@@ -933,25 +933,33 @@ const pnum=v=>{const m=String(v||"").match(/[\d.]+/);return m?parseFloat(m[0]):0
 const rebTotal=(L,f)=>{for(let l=Math.min(L,REW.length);l>=1;l--){const v=REW[l-1][f];if(v)return pnum(v)}return 0};
 const rebCredit=L=>rebTotal(L,"cm");
 const rebXP=L=>rebTotal(L,"xm");
+// What the game does (checked against a real run, R1->R40: credits +56.6x, XP +41.0x):
+// every rebirth ADDS its row's bonus to your multiplier, 100% = 1x, and a blank cell
+// repeats the row above. gainTo(a,b) = total added going from rebirth a to rebirth b, in x.
+const gainTo=(a,b,f)=>{let t=0;const s=a<b?1:-1;for(let l=Math.min(a,b)+1;l<=Math.max(a,b);l++)t+=rebTotal(l,f);return s*t/100};
 const topOf=p=>{const d=doneSet(p);return d.size?Math.max(...d):0};
 function syncMods(p){
   if(!p||!p.mods) return;
   const top=topOf(p), at=p.mods.at||{};
   if(at.cycle===p.cycle&&at.top!==top){
-    const dc=rebCredit(top)-rebCredit(at.top), dx=rebXP(top)-rebXP(at.top);
+    const dc=gainTo(at.top,top,"cm"), dx=gainTo(at.top,top,"xm");
     p.mods.credit=Math.round((p.mods.credit+dc)*100)/100; p.mods.xp=Math.round((p.mods.xp+dx)*100)/100;
-    p.mods.last=`Rebirth ${at.top} → ${top}: credits ${dc>=0?"+":""}${dc}%, XP ${dx>=0?"+":""}${dx}%`;
+    p.mods.last=`Rebirth ${at.top} → ${top}: credits ${dc>=0?"+":""}${Math.round(dc*100)/100}x, XP ${dx>=0?"+":""}${Math.round(dx*100)/100}x`;
   }
   p.mods.at={cycle:p.cycle,top};
 }
 function superMods(p){
+  // Checked against a real Super Rebirth at R40 (529 crystals): credits 650.3x -> 604.3x,
+  // XP 5083.6x -> 5136.5x. Credits lose everything this cycle's rebirths added and gain
+  // 2% (0.02x) per crystal; XP keeps the rebirth gains and gains 10% (0.1x) per crystal.
   if(!p||!p.mods) return;
   const top=topOf(p), s=srb(top); syncMods(p);
-  const dc=(s?s.credit*100:0)-rebCredit(top), dx=(s?s.xp*100:0)-rebXP(top);
+  const pay=s?s.pay:0, dc=-gainTo(0,top,"cm")+pay*0.02, dx=pay*0.1;
   p.mods.credit=Math.round((p.mods.credit+dc)*100)/100; p.mods.xp=Math.round((p.mods.xp+dx)*100)/100;
-  p.mods.last=`Super Rebirth at ${top}: credits ${dc>=0?"+":""}${Math.round(dc)}%, XP ${dx>=0?"+":""}${Math.round(dx)}%`;
+  p.mods.last=`Super Rebirth at ${top} (${pay} crystals): credits ${dc>=0?"+":""}${Math.round(dc*100)/100}x, XP +${Math.round(dx*100)/100}x`;
+  delete p.mods.check;
 }
-const modTxt=v=>(v>=0?"+":"")+(Math.round(v*100)/100).toLocaleString()+"%";
+const modTxt=v=>(Math.round(v*10)/10).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1})+"x";
 
 // ---------- state ----------
 let players={}, activeId=null, tab="inv", mode="loading", confirming=null;
@@ -1388,7 +1396,7 @@ function renderReb(p,done){
   let h=`<div class="panel"><div class="row spread"><div class="row"><label for="cycle" class="eyebrow">Cycle</label>
     <select id="cycle">${[1,2,3,4,5,6].map(c=>`<option value="${c}" ${c===p.cycle?"selected":""}>Cycle ${c}${c===1?"":" · after Super Rebirth "+(c-1)}</option>`).join("")}</select></div>
     <label class="toggle"><input type="checkbox" id="hideDone" ${hideDone?"checked":""}> Hide completed</label></div>
-    ${p.mods?`<div class="mods"><span>Credit modifier <strong>${modTxt(p.mods.credit)}</strong></span><span>XP modifier <strong>${modTxt(p.mods.xp)}</strong></span>${(()=>{const t=topOf(p);if(t>=MAX)return"";const dc=rebCredit(t+1)-rebCredit(t),dx=rebXP(t+1)-rebXP(t);return`<span class="fx">Next rebirth: credits ${dc>=0?"+":""}${dc}%, XP +${dx}%</span>`})()}</div>`:`<p class="note">Add your credit and XP modifiers under Player settings to have them update as you rebirth.</p>`}
+    ${p.mods?`<div class="mods"><span>Credit modifier <strong>${modTxt(p.mods.credit)}</strong></span><span>XP modifier <strong>${modTxt(p.mods.xp)}</strong></span>${(()=>{const t=topOf(p);if(t>=MAX)return"";const dc=gainTo(t,t+1,"cm"),dx=gainTo(t,t+1,"xm");return`<span class="fx">Next rebirth: credits +${dc}x, XP +${dx}x</span>`})()}</div>`:`<p class="note">Add your credit and XP modifiers under Player settings to have them update as you rebirth.</p>`}
     <div class="rstep"><span class="eyebrow">Rebirth level</span><button class="step" data-act="rlvl" data-n="-1" aria-label="Undo last rebirth">−</button><span class="big">${Math.max(0,...done)}</span><button class="step" data-act="rlvl" data-n="1" aria-label="Complete next rebirth">+</button><span class="note">+ marks the next rebirth complete</span></div>
     <div class="row spread"><span class="note">${done.size} of ${MAX} rebirths complete</span>${curL?`<span class="note">Next: R${curL} · <span class="mono">${CREDITS[curL-1]}</span></span>`:""}</div>
     <div class="bar" aria-hidden="true"><i style="width:${done.size/MAX*100}%"></i></div>
@@ -1631,9 +1639,9 @@ document.addEventListener("input",e=>{if(e.target.id==="search"){q=e.target.valu
 
 function renderPS(p){const box=document.getElementById('ps-box');if(!box)return;const h0=`<div class="panel" style="margin-top:8px">
     <span class="eyebrow">Credit &amp; XP modifiers</span>
-    <p class="note">Type in what the game shows now. After that the tracker updates them each time you complete a rebirth or Super Rebirth here.</p>
-    <div class="row"><label class="row" for="modC" style="gap:4px">Credits <input type="number" id="modC" step="any" value="${p.mods?p.mods.credit:""}" placeholder="e.g. 245" style="width:7rem">%</label>
-      <label class="row" for="modX" style="gap:4px">XP <input type="number" id="modX" step="any" value="${p.mods?p.mods.xp:""}" placeholder="e.g. 1210" style="width:7rem">%</label>
+    <p class="note">Type in the multipliers the game shows now (e.g. 593.7x). After that the tracker updates them each time you complete a rebirth or Super Rebirth here.</p>
+    <div class="row"><label class="row" for="modC" style="gap:4px">Credits <input type="number" id="modC" step="any" value="${p.mods?p.mods.credit:""}" placeholder="e.g. 593.7" style="width:7rem">x</label>
+      <label class="row" for="modX" style="gap:4px">XP <input type="number" id="modX" step="any" value="${p.mods?p.mods.xp:""}" placeholder="e.g. 5042.6" style="width:7rem">x</label>
       <button class="cta quiet sm" data-act="modSave">Save</button>${p.mods?`<button class="xbtn" data-act="modOff">Stop tracking</button>`:""}</div>
     ${p.mods&&p.mods.last?`<p class="note">Last update: ${esc(p.mods.last)}</p>`:""}
     <label for="rename" class="eyebrow">Player name</label>
@@ -1858,7 +1866,8 @@ function renderSide(){
   const p=cur(), el=$("sb-mods");
   let h="";
   if(p&&p.mods) h=`Credits <b>${modTxt(p.mods.credit)}</b> · XP <b>${modTxt(p.mods.xp)}</b>`;
-  else if(p) h=`<a id="sb-mods-set">Set credit &amp; XP %</a>`;
+  else if(p) h=`<a id="sb-mods-set">Set credit &amp; XP multipliers</a>`;
+  if(p&&p.mods&&p.mods.check) h+=` <a id="sb-mods-set">(check after Super Rebirth)</a>`;
   if(el.innerHTML!==h) el.innerHTML=h;
   const nm=$("ps-name"); if(nm) nm.textContent=p?p.name:"";
   const box=$("ps-box");
