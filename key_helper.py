@@ -131,7 +131,7 @@ else:
 
 # ------------------------------------------------------------------ version ---
 # Bump VERSION every time you publish an update (e.g. "1.0.1", "1.1.0").
-VERSION = "1.11.4"
+VERSION = "1.11.5"
 # Your GitHub "username/repository" where the .exe releases are published.
 UPDATE_REPO = "sclawson21/sw-key-helper"
 
@@ -148,11 +148,12 @@ DEFAULTS = {
     "search_area": None,        # None = automatic (middle of the main screen)
     "allowed_keys": "EFZQC",    # only these letters are accepted
     "press_delay": 0.06,        # seconds between key presses (Page Up/Down change it)
-    "key_hold": 0.02,           # how long each key is held down
+    "key_hold": 0.05,           # how long each key is held down (too short and the game misses it)
+    "first_key_wait": 0.12,     # extra pause before the first key of a new row
     "scan_interval": 0.03,      # seconds between screen reads while running
     "after_round_delay": 0.25,  # pause after typing a row
     "settle_time": 0.1,         # a new row must look the same this long before pressing
-    "retry_after": 1.0,         # if the same row is still there after this long, type it again
+    "retry_after": 0.45,        # if the same row is still there after this long, type it again
     "min_tile_size": 20,        # smallest tile size in pixels that counts as a key
     "require_prompt": True,     # only press when "PRESS TO FISH!" is above the keys
     "prompt_text": "PRESS TO FISH",
@@ -260,6 +261,10 @@ if cfg.get("tracker_variants") and not cfg.get("tracker_combos"):   # v1.9.8 pic
                              for r in (cfg.get("tracker_rarities") or
                                        ["Common", "Rare", "Epic", "Legendary", "Mythic"])]
 cfg["tracker_combos"] = [k for k in cfg.get("tracker_combos", []) if not k.endswith("|Iconic")]
+if cfg.get("key_hold", 0.05) < 0.05:     # v1.11.5: 20 ms taps were sometimes missed by the game
+    cfg["key_hold"] = 0.05
+if cfg.get("retry_after", 0.45) >= 1.0:  # v1.11.5: retry a stuck row sooner
+    cfg["retry_after"] = 0.45
 cfg.pop("tracker_variants", None)
 cfg.pop("tracker_rarities", None)
 if cfg.get("mini_y") == 8:
@@ -948,7 +953,7 @@ def arrow(keys):
 
 def press(k):
     pydirectinput.keyDown(k)
-    time.sleep(cfg["key_hold"])
+    time.sleep(max(0.03, cfg["key_hold"]))
     pydirectinput.keyUp(k)
 
 
@@ -1049,6 +1054,11 @@ def scanner():
 
                 if stable and not just_done:
                     print("Pressing:", arrow(keys))
+                    full_row = not (last_pressed and keys == last_pressed[-len(keys):])
+                    if full_row:
+                        # The game sometimes ignores a key sent the instant a new row
+                        # shows up - give it a moment, and tap the first key firmly
+                        time.sleep(cfg.get("first_key_wait", 0.12))
                     for k in keys:
                         if not state["enabled"]:
                             break
