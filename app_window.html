@@ -936,7 +936,12 @@ const rebXP=L=>rebTotal(L,"xm");
 // What the game does (checked against a real run, R1->R40: credits +56.6x, XP +41.0x):
 // every rebirth ADDS its row's bonus to your multiplier, 100% = 1x, and a blank cell
 // repeats the row above. gainTo(a,b) = total added going from rebirth a to rebirth b, in x.
-const gainTo=(a,b,f)=>{let t=0;const s=a<b?1:-1;for(let l=Math.min(a,b)+1;l<=Math.max(a,b);l++)t+=rebTotal(l,f);return s*t/100};
+// XP is different (checked R0->R7 of a real run: +0.5x at 2, 4 and 6, nothing at 3, 5, 7):
+// a blank XP cell adds NOTHING. Rows 34-40 have no published XP; a full R1->R40 run added
+// 41.0x in all, so those 7 rows share the remaining 18.5x (estimate until checked).
+const XP_LATE=18.5/7*100;
+const rowGain=(l,f)=>f==="xm"?(REW[l-1]&&REW[l-1].xm?pnum(REW[l-1].xm):(l>=34?XP_LATE:0)):rebTotal(l,f);
+const gainTo=(a,b,f)=>{let t=0;const s=a<b?1:-1;for(let l=Math.min(a,b)+1;l<=Math.max(a,b);l++)t+=rowGain(l,f);return s*t/100};
 const topOf=p=>{const d=doneSet(p);return d.size?Math.max(...d):0};
 function syncMods(p){
   if(!p||!p.mods) return;
